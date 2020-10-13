@@ -342,6 +342,27 @@ app.ws('/', (ws, req) => {
             .then((parser) => ws.sendData({subjects: parser.subjects}))
             .catch(ws.sendCatch);
         break;
+      case 'GetTypes':
+        if (!ws.checkAuth()) {
+          ws.sendError(
+              'Для этого метода нужна авторизация в системе',
+              4009,
+          );
+          return;
+        }
+        ws.parser()
+            .then((parser) => {
+              if (parser.needAuth) {
+                ws.sendError(
+                    'Для начала нужно авторизоваться в сетевом',
+                    4007,
+                );
+              } else return parser;
+            })
+            .then((parser) => parser.getTypes())
+            .then((types) => ws.sendData({types}))
+            .catch(ws.sendCatch);
+        break;
       case 'GetDiary':
         if (!ws.checkAuth()) {
           ws.sendError(
@@ -377,6 +398,34 @@ app.ws('/', (ws, req) => {
               start: new Date(ws.appData.data.start),
               end: new Date(ws.appData.data.end),
             }))
+            .then(ws.sendData)
+            .catch(ws.sendCatch);
+        break;
+      case 'GetMark':
+        if (!ws.checkAuth()) {
+          ws.sendError(
+              'Для этого метода нужна авторизация в системе',
+              4009,
+          );
+          return;
+        }
+        if (!ws.appData?.data?.id) {
+          ws.sendError(
+              'Для этого метода необходимо передать параметр id',
+              4005,
+          );
+          return;
+        }
+        ws.parser()
+            .then((parser) => {
+              if (parser.needAuth) {
+                ws.sendError(
+                    'Для начала нужно авторизоваться в сетевом',
+                    4007,
+                );
+              } else return parser;
+            })
+            .then((parser) => parser.getMark({id: ws.appData.data.id}))
             .then(ws.sendData)
             .catch(ws.sendCatch);
         break;
