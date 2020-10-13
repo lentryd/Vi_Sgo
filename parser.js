@@ -559,6 +559,37 @@ module.exports = class {
   }
 
   /**
+   * Получение типов работ
+   * @param {Object} [cb] Callback функции
+   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
+   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
+   * @return {Promise<JSON>}
+   */
+  getTypes(cb) {
+    return fetch(
+        `${this.host}/webapi/grade/assignment/types?all=false`,
+        {
+          headers: {
+            ...this.headers,
+            'at': this.at,
+          },
+        },
+    )
+        // Проверяем ответ и по возможности парсим в JSON
+        .then(this.checkJSON)
+        // Отправляем успешный callback
+        .then((data) => (
+          cb?.done?.call(this, data),
+          data
+        ))
+        // Отправляем провальный callback
+        .catch((err) => {
+          cb?.fail?.call(this, err);
+          throw err;
+        });
+  }
+
+  /**
    * Получение дневника
    * @param {Object} data Период получаемых данных
    * @param {Date} data.start Начало периода
@@ -577,6 +608,42 @@ module.exports = class {
           `&studentId=${this.userId}` +
           `&weekEnd=${data.end.toJSON().replace(/T.+/, '')}` +
           `&weekStart=${data.start.toJSON().replace(/T.+/, '')}`
+        ),
+        {
+          headers: {
+            ...this.headers,
+            'at': this.at,
+          },
+        },
+    )
+        // Проверяем ответ и по возможности парсим в JSON
+        .then(this.checkJSON)
+        // Отправляем успешный callback
+        .then((data) => (
+          cb?.done?.call(this, data),
+          data
+        ))
+        // Отправляем провальный callback
+        .catch((err) => {
+          cb?.fail?.call(this, err);
+          throw err;
+        });
+  }
+
+  /**
+   * Получение оценки
+   * @param {Object} data Данные оценки
+   * @param {Date} data.id ID оценки
+   * @param {Object} [cb] Callback функции
+   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
+   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
+   * @return {Promise<JSON>}
+   */
+  getMark(data, cb) {
+    return fetch(
+        (
+          `${this.host}/webapi/student/diary/assigns/${data.id}` +
+          `?studentId=${this.userId}`
         ),
         {
           headers: {
