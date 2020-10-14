@@ -551,6 +551,9 @@ app.get('/exist/:id', (req, res) => res.json(Users.exist(req.params.id)));
 app.use(compression());
 app.get('/:dir/:file', (req, res) => res.sendFile(
     path.join(__dirname, 'public', req.params.dir, req.params.file),
+    {
+      maxAge: 86400000,
+    },
     (err) => {
       if (err) res.sendStatus(err.statusCode);
     },
