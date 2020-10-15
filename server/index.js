@@ -545,7 +545,10 @@ app.ws('/', (ws, req) => {
 });
 
 // Что-то похожее на api
-app.get('/exist/:id', (req, res) => res.json(Users.exist(req.params.id)));
+app.get('/exist/:id', (req, res) => (
+  res.setHeader('Access-Control-Allow-Origin', '*'),
+  res.json(Users.exist(req.params.id))
+));
 
 // Отдаем файлы приложения
 app.use(compression());
@@ -578,7 +581,7 @@ expressWS(
         .createServer(
           process.env.ONLY_HTTPS == 1 ?
           (req, res) => {
-            res.writeHead(302, {'Location': `https://${req.headers.host}:${process.env.HTTPS_PORT}${req.url}`});
+            res.writeHead(302, {'Access-Control-Allow-Origin': '*', 'Location': `https://${req.headers.host}:${process.env.HTTPS_PORT}${req.url}`});
             res.end();
           } :
           app,
