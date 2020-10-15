@@ -618,6 +618,29 @@ module.exports = class {
     )
         // Проверяем ответ и по возможности парсим в JSON
         .then(this.checkJSON)
+        // Изменяем ответ
+        .then(({weekDays}) => weekDays.map((day) => ({
+          date: day.date,
+          lessons: day.lessons.map((lesson) => ({
+            id: lesson.classmeetingId,
+            name: lesson.subjectName,
+            room: lesson.room,
+            homework: lesson.assignments
+                ?.find((assignment) => assignment.typeId == 3)
+                .assignmentName || '',
+            number: lesson.number,
+            endTime: lesson.endTime,
+            startTime: lesson.startTime,
+            assignments: lesson.assignments
+                ?.filter((assignment) => assignment.mark)
+                ?.map((assignment) => ({
+                  id: assignment.id,
+                  type: assignment.typeId,
+                  mark: assignment.mark?.mark,
+                  name: assignment.assignmentName,
+                })),
+          })),
+        })))
         // Отправляем успешный callback
         .then((data) => (
           cb?.done?.call(this, data),
