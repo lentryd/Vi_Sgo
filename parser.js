@@ -389,9 +389,10 @@ module.exports = class {
    */
   checkRange(...dates) {
     for (const date of dates) {
+      if (!date?.toJSON) continue;
       if (
-        date > this.range.end ||
-        this.range.start > date ||
+        this.range.start - date > 864e5 ||
+        date - this.range.end > 864e5 ||
         date == 'Invalid Date'
       ) return false;
     }
@@ -507,12 +508,8 @@ module.exports = class {
         // Сохраняем данные и отправляем успешный callback
         .then((data) => (
           this.classId = parseInt(data[1].defaultValue),
-          this.range.start = new Date(
-              data[3].minValue.replace(/\..+/, '.000Z'),
-          ),
-          this.range.end = new Date(
-              data[3].maxValue.replace(/\..+/, '.000Z'),
-          ),
+          this.range.start = new Date(data[3].minValue),
+          this.range.end = new Date(data[3].maxValue),
           this.subjects = data[2].items,
           cb?.done?.call(this),
           void 0
@@ -637,7 +634,6 @@ module.exports = class {
                   id: assignment.id,
                   type: assignment.typeId,
                   mark: assignment.mark?.mark,
-                  name: assignment.assignmentName,
                 })),
           })),
         })))
@@ -677,6 +673,14 @@ module.exports = class {
     )
         // Проверяем ответ и по возможности парсим в JSON
         .then(this.checkJSON)
+        // Изменяем ответ
+        .then((data) => ({
+          date: data.date,
+          name: data.assignmentName,
+          weight: data.weight,
+          teacher: data.teacher.name,
+          subject: data.subjectGroup.name,
+        }))
         // Отправляем успешный callback
         .then((data) => (
           cb?.done?.call(this, data),
@@ -748,9 +752,10 @@ module.exports = class {
    * Загрузка отчета
    * @param {String} queueURL Ссылка на страницу запроса
    * @param {*} selectedData Выбранные данные, которые нужно отправить
+   * @param {Function} [parseHTML] Функция для обработки ответа
    * @return {Promise<JSON>}
    */
-  getReportFile(queueURL, selectedData) {
+  getReportFile(queueURL, selectedData, parseHTML = (html) => html) {
     return fetch(
         (
           `${this.host}/WebApi/signalr/negotiate` +
@@ -921,11 +926,13 @@ module.exports = class {
               },
             },
         ))
-        // Отправляем данные
+        // Получаем текст файла
         .then((res) => {
           if (!res.ok) throw new FetchError(res);
           else return res.text();
-        });
+        })
+        // Парсим результат
+        .then(parseHTML);
   }
 
   /**
@@ -979,6 +986,43 @@ module.exports = class {
                 ),
               },
             ],
+            (html) => {
+              const root = htmlParser.parse(html);
+              let assignments = root.querySelectorAll('table.table-print tr');
+              assignments = assignments.splice(1, assignments.length - 2);
+              assignments = assignments.map((a) => (
+                a.childNodes = a.childNodes.filter((c) => c.tagName == 'TD'),
+                {
+                  type: a.childNodes[0].innerText,
+                  name: a.childNodes[1].innerText,
+                  date: str2date(a.childNodes[2].innerText),
+                  issueDate: str2date(a.childNodes[3].innerText),
+                  mark: +a.childNodes[4].innerText,
+                }
+              ));
+              return {
+                assignments,
+                middleMark: +root
+                    .querySelector('table.table-print tr.totals')
+                    .childNodes.filter((c) => c.tagName == 'TD')[2]
+                    .text.replace(',', '.').replace(/^\D+(?=\d)/, ''),
+              };
+
+              /**
+               * Перевод строки в время
+               * @param {String} str Строка в формате dd.mm.yy
+               * @return {Date} Время
+               */
+              function str2date(str) {
+                const [, date, month, year] = str
+                    .match(/(\d{1,2})\.(\d{1,2})\.(\d{1,2})/);
+                return new Date(`20${year}-${month}-${
+                  date < 10 ?
+                  '0' + date :
+                  date
+                }T00:00:00`);
+              }
+            },
         ))
         // Отправляем успешный callback
         .then((data) => (
