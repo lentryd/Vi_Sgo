@@ -220,7 +220,7 @@ app.ws('/', (ws, req) => {
           );
           return;
         }
-        if (!ws.appData?.data?.username) {
+        if (!ws.appData?.data?.login) {
           ws.sendError(
               'Для этого метода необходимо передать параметр username',
               4005,
@@ -236,7 +236,7 @@ app.ws('/', (ws, req) => {
         }
         new Parser(
             ws.appData.data.host,
-            ws.appData.data.username,
+            ws.appData.data.login,
             ws.appData.data.password,
             ws.appData.data.ttsLogin,
         )
@@ -244,7 +244,7 @@ app.ws('/', (ws, req) => {
               done() {
                 Users.add({
                   host: ws.appData.data.host,
-                  login: ws.appData.data.username,
+                  login: ws.appData.data.login,
                   password: ws.appData.data.password,
                   ttsLogin: ws.appData.data.ttsLogin,
                 })
@@ -426,7 +426,7 @@ app.ws('/', (ws, req) => {
               } else return parser;
             })
             .then((parser) => parser.getMark({id: ws.appData.data.id}))
-            .then(ws.sendData)
+            .then((mark) => ws.sendData({mark}))
             .catch(ws.sendCatch);
         break;
       case 'GetSubject':
@@ -468,11 +468,15 @@ app.ws('/', (ws, req) => {
               } else return parser;
             })
             .then((parser) => parser.getSubject({
-              start: new Date(ws.appData.data.start),
-              end: new Date(ws.appData.data.end),
+              start: new Date(
+                  ws.appData.data.start,
+              ),
+              end: new Date(
+                  ws.appData.data.end,
+              ),
               id: ws.appData.data.id,
             }))
-            .then(ws.sendData)
+            .then((subject) => ws.sendData({subject}))
             .catch(ws.sendCatch);
         break;
       case 'GetJournal':
