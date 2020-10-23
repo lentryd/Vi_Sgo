@@ -324,7 +324,7 @@ module.exports = class {
   get headers() {
     return {
       'cookie': this.cookie,
-      'referer': `${this.host}`,
+      'referer': this.host,
       'x-requested-with': 'xmlhttprequest',
       'content-type': 'application/x-www-form-urlencoded',
     };
@@ -624,7 +624,7 @@ module.exports = class {
             room: lesson.room,
             homework: lesson.assignments
                 ?.find((assignment) => assignment.typeId == 3)
-                .assignmentName || '',
+                ?.assignmentName || '',
             number: lesson.number,
             endTime: lesson.endTime,
             startTime: lesson.startTime,
