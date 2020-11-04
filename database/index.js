@@ -65,13 +65,6 @@ module.exports = class {
    */
   add(data) {
     return new Promise((resolve, reject) => {
-      try {
-        data = JSON.stringify(data);
-      } catch (e) {
-        reject(new Error('Failed to stringify data.'));
-        return;
-      }
-
       let id = '';
       do {
         id = guid();
@@ -104,7 +97,7 @@ module.exports = class {
   /**
    * Получение данныех
    * @param {String} id ID файла
-    * @param {Boolean} [onlyData] `true` если нужно возвращать только данные
+   * @param {Boolean} [onlyData] `true` если нужно возвращать только данные
    * @return {Promise<*>}
    */
   read(id, onlyData = true) {
@@ -124,13 +117,9 @@ module.exports = class {
               const fileData = JSON.parse(data.toString());
               resolve(onlyData ?
                 {
-                  ...JSON.parse(fileData.data),
+                  ...fileData.data,
                   id: fileData.id,
-                } :
-                {
-                  ...fileData,
-                  data: JSON.parse(fileData.data),
-                },
+                } : fileData,
               );
             } catch (e) {
               reject(e);
@@ -143,39 +132,37 @@ module.exports = class {
   /**
    * Запись данных
    * @param {String} id ID файла
-   * @param {*} data Данные, которые нужно сохранить
+   * @param {*} newData Данные, которые нужно сохранить
    * @return {Promise<Boolean>} `true` если все сохранилось
   */
-  write(id, data) {
+  write(id, newData) {
     return this.read(id, false)
-        .then(({timestamps}) => {
-          try {
-            data = JSON.stringify(data);
-          } catch (e) {
-            reject(new Error('Failed to stringify data.'));
-            return;
-          }
-          return new Promise((resolve, reject) => {
-            fs.writeFile(
-                this.path + id + '.vi',
-                JSON.stringify({
-                  id,
-                  timestamps: {
-                    ...timestamps,
-                    write: new Date().toJSON(),
-                  },
-                  data,
-                }),
-                (err) => {
-                  if (err) {
-                    reject(err);
-                    return;
-                  }
-                  resolve(true);
+        .then(({timestamps, data}) => new Promise((resolve, reject) => {
+          fs.writeFile(
+              this.path + id + '.vi',
+              JSON.stringify({
+                id,
+                timestamps: {
+                  ...timestamps,
+                  write: new Date().toJSON(),
                 },
-            );
-          });
-        });
+                data: {
+                  ...data,
+                  ...newData,
+                },
+              }),
+              (err) => {
+                if (err) {
+                  reject(err);
+                  return;
+                }
+                resolve({
+                  ...data,
+                  ...newData,
+                });
+              },
+          );
+        }));
   }
 
   /**
@@ -197,7 +184,7 @@ module.exports = class {
               return;
             }
             this.files.splice(
-                this.files.findIndex((f) => f == id),
+                this.files.findIndex((f) => f == id + '.vi'),
                 1,
             );
             resolve(true);

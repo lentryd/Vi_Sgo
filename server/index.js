@@ -1,3 +1,4 @@
+const useragent = require('express-useragent');
 const compression = require('compression');
 const expressWS = require('express-ws');
 const Parser = require('../parser');
@@ -12,10 +13,17 @@ expressWS(app);
 
 // Подключаем базы данных
 const Users = require('../database/users');
+const Links = require('../database/links');
+const Tokens = require('../database/tokens');
+
+// Инициализируем базы данных
 Users.init().catch(console.error);
+Links.init().catch(console.error);
+Tokens.init().catch(console.error);
 
 // Парсим тело ответа и т.д.
 app.use(express.json());
+app.use(useragent.express());
 app.use(express.urlencoded({extended: true}));
 
 // Работаем с вебсокетами
@@ -25,9 +33,71 @@ app.ws('/', (ws, req) => {
    * @return {boolean} `true` если пользователь авторизован
    */
   ws.checkAuth = function() {
-    return Users.exist(
-        req.query.uid,
-    );
+    return Tokens.exist(req.query.uid);
+  };
+
+  /**
+   * Получаем информацию о пользователе по токену
+   * @return {Promise<Object>} информация о пользователе
+   */
+  ws.userInfo = function() {
+    return Tokens.read(req.query.uid)
+        .then(({uid}) => Users.read(uid));
+  };
+
+  /**
+   * Сохраняем информацию о пользователе по токену
+   * @param {Object} data Новая информация о пользователе
+   * @return {Promise<Object>} информация о пользователе
+   */
+  ws.userSaveInfo = function(data) {
+    return Tokens.read(req.query.uid)
+        .then(({uid}) => Users.write(uid, data));
+  };
+
+  /**
+   * Получаем информацию об устройстве
+   * @return {Object} информацию об устройстве
+   */
+  ws.deviceInfo = function() {
+    const {
+      isDesktop,
+      isAndroid,
+      isWindows,
+      isTablet,
+      isMobile,
+      platform,
+      isiPhone,
+      browser,
+      version,
+      isMac,
+      os,
+    } = req.useragent;
+    return {
+      os,
+      browser,
+      version,
+      platform,
+      img: isTablet ?
+            (
+              isAndroid ? 'tablet_android' :
+              isMac ? 'tablet_mac' :
+              'tablet'
+            ) :
+            isMobile ?
+            (
+              isAndroid ? 'phone_android' :
+              isiPhone ? 'phone_iphone' :
+              'smartphone'
+            ) :
+            isDesktop ?
+            (
+              isWindows ? 'desktop_windows' :
+              isMac ? 'desktop_mac' :
+              'computer'
+            ) :
+            'device_unknown',
+    };
   };
 
   /**
@@ -36,19 +106,21 @@ app.ws('/', (ws, req) => {
    */
   ws.parser = function() {
     return new Promise((res, rej) => {
-      if (req.query.uid in activeParsers) {
-        res(activeParsers[req.query.uid]);
-      } else {
-        Users.read(req.query.uid)
-            .then((data) => (
-              [data.host, data.login, data.password, data.ttsLogin]
-            ))
-            .then((data) => (
-              activeParsers[req.query.uid] = new Parser(...data),
-              res(activeParsers[req.query.uid])
-            ))
-            .catch(rej);
-      }
+      let udata;
+      ws.userInfo()
+          .then((data) => udata = data)
+          .then(() => udata.id in activeParsers)
+          .then((bool) => !bool ?
+              activeParsers[udata.id] = new Parser(
+                  udata.host,
+                  udata.login,
+                  udata.password,
+                  udata.ttsLogin,
+              ):
+              activeParsers[udata.id],
+          )
+          .then(res)
+          .catch(rej);
     });
   };
 
@@ -108,13 +180,6 @@ app.ws('/', (ws, req) => {
     }));
     ws.appData = {};
   };
-
-  // Говорим клиенту, что мы готовы
-  ws.send(JSON.stringify({
-    ok: true,
-    method: 'Open',
-    data: {},
-  }));
 
   // Слушаем новые сообщения от пользователя
   ws.on('message', (msg) => {
@@ -213,13 +278,6 @@ app.ws('/', (ws, req) => {
           );
           return;
         }
-        if (!ws.appData?.data?.ttsLogin) {
-          ws.sendError(
-              'Для этого метода необходимо передать параметр ttsLogin',
-              4005,
-          );
-          return;
-        }
         if (!ws.appData?.data?.login) {
           ws.sendError(
               'Для этого метода необходимо передать параметр username',
@@ -234,30 +292,121 @@ app.ws('/', (ws, req) => {
           );
           return;
         }
+        if (!ws.appData?.data?.ttsLogin) {
+          ws.sendError(
+              'Для этого метода необходимо передать параметр ttsLogin',
+              4005,
+          );
+          return;
+        }
+        let uid;
+        let parser;
         new Parser(
             ws.appData.data.host,
             ws.appData.data.login,
             ws.appData.data.password,
             ws.appData.data.ttsLogin,
         )
-            .logIn({
-              done() {
-                Users.add({
-                  host: ws.appData.data.host,
-                  login: ws.appData.data.login,
-                  password: ws.appData.data.password,
-                  ttsLogin: ws.appData.data.ttsLogin,
-                })
-                    .then((id) => {
-                      activeParsers[id] = this;
-                      req.query.uid = id;
-                      ws.sendData({id});
-                    });
-              },
+            .logIn()
+            .then((p) => parser = p)
+            .then(() => Users.add({
+              host: ws.appData.data.host,
+              login: ws.appData.data.login,
+              photo: parser.photo,
+              email: parser.email,
+              lastName: parser.lastName,
+              firstName: parser.firstName,
+              password: ws.appData.data.password,
+              ttsLogin: ws.appData.data.ttsLogin,
+            }))
+            .then((id) => (
+              uid = id,
+              activeParsers[id] = parser
+            ))
+            .then(() => Tokens.add({
+              uid,
+              limited: false,
+              ctime: new Date(),
+              cdevice: ws.deviceInfo(),
+            }))
+            .then((id) => (
+              req.query.uid = id,
+              ws.sendData({id})
+            ))
+            .catch(ws.sendCatch);
+        break;
+      case 'AddUserViaLink':
+        if (!ws.appData?.data?.id) {
+          ws.sendError(
+              'Для этого метода необходимо передать параметр id',
+              4005,
+          );
+          return;
+        }
+        Links.write(ws.appData.data.id, {work: false})
+            .then(({tid}) => Tokens.read(tid))
+            .then(({uid, limited}) => {
+              if (limited === true) {
+                throw new Error('You don\'t have rights to this operation.');
+              }
+              return Tokens.add({
+                uid,
+                limited: true,
+                ctime: new Date(),
+                cdevice: ws.deviceInfo(),
+              });
             })
+            .then((id) => (
+              req.query.uid = id,
+              ws.sendData({id})
+            ))
             .catch(ws.sendCatch);
         break;
       // Пользовательские методы
+      case 'ChangeUser':
+        if (!ws.checkAuth()) {
+          ws.sendError(
+              'Для этого метода нужна авторизация в системе',
+              4009,
+          );
+          return;
+        }
+        if (!ws.appData?.data?.id) {
+          ws.sendError(
+              'Для этого метода необходимо передать параметр id',
+              4005,
+          );
+          return;
+        }
+        req.query.uid = ws.appData.data.id;
+        ws.sendData({changed: ws.checkAuth()});
+        break;
+      case 'GetAuthLink':
+        if (!ws.checkAuth()) {
+          ws.sendError(
+              'Для этого метода нужна авторизация в системе',
+              4009,
+          );
+          return;
+        }
+        if (!ws.appData?.data?.id) {
+          ws.sendError(
+              'Для этого метода необходимо передать параметр id',
+              4005,
+          );
+          return;
+        }
+        Tokens.read(ws.appData.data.id)
+            .then(({id, limited}) => {
+              if (limited === true) {
+                throw new Error('You don\'t have rights to this operation.');
+              }
+              return Links.connectionLink(id);
+            })
+            .then((id) => `http${req.secure ? 's' : ''}://${req.hostname}/login/${id}`)
+            .then((link) => ws.sendData({link}))
+            .catch(ws.sendCatch);
+        break;
       case 'LogIn':
         if (!ws.checkAuth()) {
           ws.sendError(
@@ -267,7 +416,19 @@ app.ws('/', (ws, req) => {
           return;
         }
         ws.parser()
-            .then((parser) => parser.logIn())
+            .then((p) => p.needAuth ? p.logIn() : {})
+            .then((p) => p.readUserUpdate === false ?
+              (
+                p.readUserUpdate = true,
+                ws.userSaveInfo({
+                  photo: p.photo,
+                  email: p.email,
+                  lastName: p.lastName,
+                  firstName: p.firstName,
+                })
+              ) :
+              void 0,
+            )
             .then(() => ws.sendData({auth: true}))
             .catch(ws.sendCatch);
         break;
@@ -280,14 +441,81 @@ app.ws('/', (ws, req) => {
           return;
         }
         ws.parser()
-            .then((parser) => parser.logOut({
-              done() {
-                this.at = 0;
-                this.ver = 0;
-                this.tokenTimeOut = 0;
-              },
-            }))
+            .then((parser) =>
+              parser.tokenTimeOut - Date.now() > 1000 ?
+                parser.logOut() :
+                void 0,
+            )
             .then(() => ws.sendData({auth: false}))
+            .catch(ws.sendCatch);
+        break;
+      case 'Exit':
+        if (!ws.checkAuth()) {
+          ws.sendError(
+              'Для этого метода нужна авторизация в системе',
+              4009,
+          );
+          return;
+        }
+        if (!ws.appData?.data?.id) {
+          ws.sendError(
+              'Для этого метода необходимо передать параметр id',
+              4005,
+          );
+          return;
+        }
+        Tokens.del(ws.appData.data.id)
+            .then(() => ws.sendData({leave: true}))
+            .catch(ws.sendCatch);
+        break;
+      case 'Unlimited':
+        if (!ws.checkAuth()) {
+          ws.sendError(
+              'Для этого метода нужна авторизация в системе',
+              4009,
+          );
+          return;
+        }
+        if (!ws.appData?.data?.id) {
+          ws.sendError(
+              'Для этого метода необходимо передать параметр id',
+              4005,
+          );
+          return;
+        }
+        Tokens.read(req.query.uid)
+            .then(({limited}) => {
+              if (limited === true) {
+                throw new Error('You don\'t have rights to this operation.');
+              }
+              return Tokens.write(ws.appData.data.id, {limited: false});
+            })
+            .then(({limited}) => ws.sendData({limited}))
+            .catch(ws.sendCatch);
+        break;
+      case 'CanShare':
+        if (!ws.checkAuth()) {
+          ws.sendError(
+              'Для этого метода нужна авторизация в системе',
+              4009,
+          );
+          return;
+        }
+        Tokens.read(req.query.uid)
+            .then(({limited}) => ws.sendData({can: !limited}))
+            .catch(ws.sendCatch);
+        break;
+      case 'CommonUsers':
+        if (!ws.checkAuth()) {
+          ws.sendError(
+              'Для этого метода нужна авторизация в системе',
+              4009,
+          );
+          return;
+        }
+        ws.userInfo()
+            .then(({id}) => Tokens.commonUser(id))
+            .then((users) => ws.sendData({users}))
             .catch(ws.sendCatch);
         break;
       case 'CheckAuth':
@@ -299,7 +527,9 @@ app.ws('/', (ws, req) => {
           return;
         }
         ws.parser()
-            .then((parser) => ws.sendData({need: parser.needAuth}))
+            .then((parser) => ws.sendData({
+              need: parser.tokenTimeOut - Date.now() <= 1000,
+            }))
             .catch(ws.sendCatch);
         break;
       case 'TimeOutAuth':
@@ -546,13 +776,38 @@ app.ws('/', (ws, req) => {
         break;
     }
   });
+
+  // Говорим клиенту, что мы готовы
+  ws.send(JSON.stringify({
+    ok: true,
+    method: 'Open',
+  }));
 });
 
 // Что-то похожее на api
-app.get('/exist/:id', (req, res) => (
-  res.setHeader('Access-Control-Allow-Origin', '*'),
-  res.json(Users.exist(req.params.id))
-));
+app.get('/users/:id', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  new Promise((res) => {
+    Links.read(req.params.id)
+        .then(({tid}) => tid)
+        .catch(() => req.params.id)
+        .then((id) => Tokens.read(id))
+        .then(({uid}) => res(uid))
+        .catch(() => res(req.params.id));
+  })
+      .then((id) => Users.read(id))
+      .then((data) => {
+        delete data.login;
+        delete data.ttsLogin;
+        delete data.password;
+        res.json(data);
+      })
+      .catch(() => res.status(404).json({exist: false}));
+});
+app.get('/exist/:id', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(Tokens.exist(req.params.id));
+});
 
 // Отдаем файлы приложения
 app.use(compression());
@@ -604,4 +859,4 @@ expressWS(
         )
         .listen(process.env.HTTPS_PORT),
 );
-console.log('Server started...');
+console.info('Server started...');
