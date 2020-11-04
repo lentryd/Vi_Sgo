@@ -277,28 +277,68 @@ module.exports = class {
    * @param {String} ttsLogin Данные авторизации (регион, школа и т.д.)
    */
   constructor(host, login, password, ttsLogin) {
-    this.at = null;
-    this.ver = null;
+    /**
+     * Обозначения данных
+     *  Где используются:
+     *    $0 - Система
+     *    $1 - Авторизация
+     *    $2 - Взаимодействие с сайтом
+     *    $3 - Система/Публичный доступ
+     *
+     *  Как можно добыть:
+     *    #0 - Передаются в конструктроре
+     *    #1 - Можно получить только после или во время авторизации
+     *    #2 - Появляются во время работы парсера (куки и прочее)
+     *    #3 - Результаты функций, которые нужно сохранить
+     */
+    // Данные: #0 $1
+    this._host = host;
+    this._login = login;
+    this._password = password;
+    this._ttsLogin = ttsLogin.toLowerCase();
+
+    // Данные: #1 $2
+    this._at = undefined;
+    this._ver = undefined;
+
+    // Данные: #2 $2
+    this._cookie = {};
+    this._secure = false;
+    this._timeParseInfo = null;
+
+    // Данные: #3 $3
+    this.photo = null;
+    this.email = null;
     this.range = {
       start: null,
       end: null,
     };
-    this._host = host;
-    this._cookie = {};
     this.subjects = [];
-    this.login = login;
     this.userId = null;
     this.yearId = null;
     this.classId = null;
-    this.secure = false;
     this.schoolId = null;
     this.currYear = null;
+    this.lastName = null;
+    this.firstName = null;
     this.dateFormat = null;
-    this.password = password;
     this.tokenTimeOut = null;
     this.fullSchoolName = null;
     this.serverTimeZone = null;
-    this.ttsLogin = ttsLogin.toLowerCase();
+    this.readUserUpdate = null;
+  }
+
+  /**
+   * Информация о пользователе
+   * @return {Object}
+   */
+  get info() {
+    return {
+      firstName: this.firstName,
+      lastName: this.lastName,
+      email: this.email,
+      photo: this.photo,
+    };
   }
 
   /**
@@ -306,28 +346,7 @@ module.exports = class {
    * @return {String}
    */
   get host() {
-    return `http${this.secure?'s':''}://${this._host}`;
-  }
-
-  /**
-   * Ссылка на сайт для ws
-   * @return {String}
-   */
-  get hostWS() {
-    return `ws${this.secure?'s':''}://${this._host}`;
-  }
-
-  /**
-   * Часто используемые заголовки
-   * @return {Object}
-   */
-  get headers() {
-    return {
-      'cookie': this.cookie,
-      'referer': this.host,
-      'x-requested-with': 'xmlhttprequest',
-      'content-type': 'application/x-www-form-urlencoded',
-    };
+    return `http${this._secure?'s':''}://${this._host}`;
   }
 
   /**
@@ -345,19 +364,11 @@ module.exports = class {
   }
 
   /**
-   * Проверяет нужна ли авторизация
-   * @return {Boolean}
-   */
-  get needAuth() {
-    return !this.at || !this.ver || this.tokenTimeOut - Date.now() <= 0;
-  }
-
-  /**
    * Устанавливает куки для парсера
    * @param {Response} res Ответ сервера
    * @return {Response}
    */
-  setCookie(res) {
+  set cookie(res) {
     for (const c of res.headers.raw()['set-cookie'] || []) {
       if (typeof c != 'string') continue;
       const [, name, value] = c.match(/^(.+?)=(.+?)(?=;|$)/) || [];
@@ -365,6 +376,27 @@ module.exports = class {
       this._cookie[name] = value;
     }
     return res;
+  }
+
+  /**
+   * Часто используемые заголовки
+   * @return {Object}
+   */
+  get headers() {
+    return {
+      'cookie': this.cookie,
+      'referer': this.host,
+      'x-requested-with': 'xmlhttprequest',
+      'content-type': 'application/x-www-form-urlencoded',
+    };
+  }
+
+  /**
+   * Нужна ли авторизация в сетевом
+   * @return {boolean} `true` если нужна
+   */
+  get needAuth() {
+    return this.tokenTimeOut - Date.now() <= 1000;
   }
 
   /**
@@ -401,16 +433,13 @@ module.exports = class {
 
   /**
    * Авторизация в сетевом
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
-   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
-   * @return {Promise<undefined>}
+   * @return {Promise<this>}
    */
-  logIn(cb) {
+  logIn() {
     return fetch(this.host)
         // Проверяем хост (доступен и есть ли SSL)
         .then((res) => {
-          if (res.ok) this.secure = res.url.startsWith('https');
+          if (res.ok) this._secure = res.url.startsWith('https');
           else throw new FetchError(res);
         })
         // Делаем запрос к `/webapi/auth/getdata` (нужно для авторизации)
@@ -422,12 +451,12 @@ module.exports = class {
             },
         ))
         // Сохраняем куки, которые отправил сервер
-        .then((res) => this.setCookie(res))
+        .then((res) => this.cookie = res)
         // Проверяем ответ и по возможности парсим в JSON
         .then(this.checkJSON)
         // Сохраняем `ver` и проходим авторизацию
-        .then((data) => (
-          this.ver = data.ver,
+        .then(({ver, salt, lt}) => (
+          this._ver = ver,
           fetch(
               `${this.host}/webapi/login`,
               {
@@ -435,51 +464,93 @@ module.exports = class {
                 headers: this.headers,
                 body: (
                   'LoginType=1' +
-                  `&lt=${data.lt}` +
-                  `&ver=${data.ver}` +
-                  `&${this.ttsLogin}` +
-                  `&UN=${encodeURI(this.login)}` +
+                  `&lt=${lt}` +
+                  `&ver=${ver}` +
+                  `&${this._ttsLogin}` +
+                  `&UN=${encodeURI(this._login)}` +
                   `&PW=${
                     md5(
-                        data.salt +
-                        md5(this.password),
-                    ).substring(0, this.password.length)}` +
-                  `&pw2=${md5(data.salt + md5(this.password))}`
+                        salt +
+                        md5(this._password),
+                    ).substring(0, this._password.length)}` +
+                  `&pw2=${md5(salt + md5(this._password))}`
                 ),
               },
           )
         ))
         // Сохраняем куки, которые отправил сервер
-        .then((res) => this.setCookie(res))
+        .then((res) => this.cookie = res)
         // Проверяем ответ и по возможности парсим в JSON
         .then(this.checkJSON)
         // Сохраняем `at` и `tokenTimeOut`, после чего получаем остальные данные
-        .then((data) => (
-          this.at = data.at,
-          this.tokenTimeOut = Date.now() + data.timeOut,
-          fetch(
-              `${this.host}/angular/school/main/`,
-              {
-                method: 'post',
-                headers: this.headers,
-                body: (
-                  'LoginType=0' +
-                  `&AT=${this.at}` +
-                  `&VER=${this.ver}`
-                ),
-              },
-          )
-        ))
+        .then(({at, timeOut}) => {
+          this._at = at;
+          this.tokenTimeOut = Date.now() + timeOut;
+          if (Date.now() - this._timeParseInfo >= 864e5) {
+            return this.getUsetInfo();
+          } else return void 0;
+        })
+        .then(() => this);
+  }
+
+  /**
+   * Выход из сетевого
+   * @return {Promise<undefined>}
+   */
+  logOut() {
+    return fetch(
+        `${this.host}/asp/logout.asp`,
+        {
+          method: 'post',
+          headers: this.headers,
+          body: (
+            `at=${this._at}` +
+            `&VER=${this._ver}`
+          ),
+        },
+    )
+        // Отправляем успешный callback
+        .then((res) => {
+          if (!res.ok) throw new FetchError(res);
+          this._at = null;
+          this._ver = null;
+          this.tokenTimeOut = null;
+          return undefined;
+        });
+  }
+
+  /**
+   * Получение информации о пользователе
+   * @return {Promise<undefined>}
+   */
+  getUsetInfo() {
+    return fetch(
+        `${this.host}/asp/MySettings/MySettings.asp?at=${this._at}`,
+        {
+          method: 'post',
+          headers: this.headers,
+          body: (
+            `AT=${this._at}` +
+            `&VER=${this._ver}`
+          ),
+        },
+    )
         // Получаем текст ответа
         .then((res) => res.text())
+        // Получаем фамилию, имя и почту
+        .then((text) => (
+          this.firstName = text.match(/Имя.+?value="(.*?)"/)?.[1],
+          this.lastName = text.match(/Фамилия.+?value="(.*?)"/)?.[1],
+          this.email = text.match(/E-Mail.+?value="(.*?)"/)?.[1],
+          text
+        ))
         // Парсим данные `appContext`
         .then((text) => (
-          new Function(
-              text
-                  // eslint-disable-next-line max-len
-                  .match(/\w+ appContext = {.+?};|appContext\.(?!ya)\w+ = (?!function).+?;/sg)
-                  .reduce((a, c) => a += c) +
-                  'return appContext',
+          new Function(text
+              // eslint-disable-next-line max-len
+              .match(/\w+ appContext = {.+?};|appContext\.(?!ya)\w+ = (?!function).+?;/sg)
+              .reduce((a, c) => a += c) +
+              'return appContext',
           )()
         ))
         // Сохраняем нужные данные и получаем данные отчетов
@@ -496,63 +567,42 @@ module.exports = class {
               {
                 headers: {
                   ...this.headers,
-                  'at': this.at,
+                  'at': this._at,
                 },
               },
           )
         ))
         // Проверяем ответ и по возможности парсим в JSON
         .then(this.checkJSON)
-        // Получаем нужные данные
-        .then((data) => data.filterSources)
-        // Сохраняем данные и отправляем успешный callback
-        .then((data) => (
-          this.classId = parseInt(data[1].defaultValue),
-          this.range.start = new Date(data[3].minValue),
-          this.range.end = new Date(data[3].maxValue),
-          this.subjects = data[2].items,
-          cb?.done?.call(this),
+        // Сохраняем данные отчетов
+        .then(({filterSources}) => (
+          this.classId = parseInt(filterSources[1].defaultValue),
+          this.range.start = new Date(filterSources[3].minValue),
+          this.range.end = new Date(filterSources[3].maxValue),
+          this.subjects = filterSources[2].items,
+          this._timeParseInfo = Date.now(),
+          this.readUserUpdate = false,
           void 0
         ))
-        // Пойманные ошибки отправляем в неудачный callback
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
-  }
-
-  /**
-   * Выход из сетевого
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
-   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
-   * @return {Promise<undefined>}
-   */
-  logOut(cb) {
-    return fetch(
-        `${this.host}/asp/logout.asp`,
-        {
-          method: 'post',
-          headers: this.headers,
-          body: (
-            `at=${this.at}` +
-            `&VER=${this.ver}`
-          ),
-        },
-    )
-        // Отправляем успешный callback
-        .then((res) => {
-          if (!res.ok) throw new FetchError(res);
-          this.at = null;
-          this.ver = null;
-          cb?.done?.call(this);
-          return undefined;
-        })
-        // Отправляем провальный callback
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
+        // Загружаем фото
+        .then(() => fetch(
+            (
+              `${this.host}/webapi/users/photo` +
+              `?at=${this._at}` +
+              `&ver=${this._ver}` +
+              `&userId=${this.userId}`
+            ),
+            {
+              headers: this.headers,
+            },
+        ))
+        // Получаем буфер
+        .then((res) => res.buffer())
+        // Сохраняем фото
+        .then((buffer) => (
+          this.photo = 'data:image/jpeg;base64,' + buffer.toString('base64'),
+          void 0
+        ));
   }
 
   /**
@@ -568,7 +618,7 @@ module.exports = class {
         {
           headers: {
             ...this.headers,
-            'at': this.at,
+            'at': this._at,
           },
         },
     )
@@ -600,7 +650,7 @@ module.exports = class {
     return fetch(
         (
           `${this.host}/webapi/student/diary` +
-          `?vers=${this.ver}` +
+          `?vers=${this._ver}` +
           `&yearId=${this.yearId}` +
           `&studentId=${this.userId}` +
           `&weekEnd=${data.end.toJSON().replace(/T.+/, '')}` +
@@ -609,7 +659,7 @@ module.exports = class {
         {
           headers: {
             ...this.headers,
-            'at': this.at,
+            'at': this._at,
           },
         },
     )
@@ -667,7 +717,7 @@ module.exports = class {
         {
           headers: {
             ...this.headers,
-            'at': this.at,
+            'at': this._at,
           },
         },
     )
@@ -694,61 +744,6 @@ module.exports = class {
   }
 
   /**
-   * Получение итоговых оценок
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
-   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
-   * @return {Promise<JSON>}
-   */
-  getTotalMarks(cb) {
-    return fetch(
-        `${this.host}/asp/Reports/ReportStudentTotalMarks.asp`,
-        {
-          method: 'post',
-          headers: this.headers,
-          body: (
-            `at=${this.at}` +
-            `&ver=${this.ver}` +
-            `&RPTID=StudentTotalMarks` +
-            `&RPNAME=${encodeURI('Итоговые отметки')}`
-          ),
-        },
-    )
-        // Сохраняем куки
-        .then((res) => this.setCookie(res))
-        // Получаем итоговые оценки
-        .then(() => fetch(
-            `${this.host}/asp/Reports/StudentTotalMarks.asp`,
-            {
-              method: 'post',
-              headers: {
-                ...this.headers,
-                'at': this.at,
-              },
-              body: (
-                `LoginType=0` +
-                `&AT=${this.at}` +
-                `&VER=${this.ver}` +
-                `&SID=${this.userId}` +
-                `&PCLID=${this.classId}`
-              ),
-            },
-        ))
-        // Получаем текст ответа
-        .then((res) => res.text())
-        // Отправляем успешный callback
-        .then((text) => (
-          cb?.done?.call(this, text),
-          text
-        ))
-        // Отправляем провальный callback
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
-  }
-
-  /**
    * Загрузка отчета
    * @param {String} queueURL Ссылка на страницу запроса
    * @param {*} selectedData Выбранные данные, которые нужно отправить
@@ -759,8 +754,8 @@ module.exports = class {
     return fetch(
         (
           `${this.host}/WebApi/signalr/negotiate` +
-          `?_=${this.ver}` +
-          `&at=${this.at}` +
+          `?_=${this._ver}` +
+          `&at=${this._at}` +
           `&clientProtocol=1.5` +
           `&transport=webSockets` +
           `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D`
@@ -775,8 +770,8 @@ module.exports = class {
         .then(({ConnectionToken}) => new Promise((resolve, reject) => {
           const ws = new WebSocket(
               (
-                `${this.hostWS}/WebApi/signalr/connect` +
-                `?at=${this.at}` +
+                `${this.host.replace('http', 'ws')}/WebApi/signalr/connect` +
+                `?at=${this._at}` +
                 `&clientProtocol=1.5` +
                 `&transport=webSockets` +
                 `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D` +
@@ -790,7 +785,7 @@ module.exports = class {
           ws.on('open', () => fetch(
               (
                 `${this.host}/WebApi/signalr/start` +
-                `?at=${this.at}` +
+                `?at=${this._at}` +
                 `&clientProtocol=1.5` +
                 `&transport=webSockets` +
                 `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D` +
@@ -809,7 +804,7 @@ module.exports = class {
                     method: 'post',
                     headers: {
                       ...this.headers,
-                      'at': this.at,
+                      'at': this._at,
                       'content-type': 'application/json; charset=UTF-8',
                     },
                     body: JSON.stringify({
@@ -904,7 +899,7 @@ module.exports = class {
             fetch(
                 (
                   `${this.host}/WebApi/signalr/abort` +
-                  `?at=${this.at}` +
+                  `?at=${this._at}` +
                   `&clientProtocol=1.5` +
                   `&transport=webSockets` +
                   `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D` +
@@ -922,7 +917,7 @@ module.exports = class {
             {
               headers: {
                 ...this.headers,
-                'at': this.at,
+                'at': this._at,
               },
             },
         ))
@@ -1080,6 +1075,61 @@ module.exports = class {
         .then((data) => (
           cb?.done?.call(this, data),
           data
+        ))
+        // Отправляем провальный callback
+        .catch((err) => {
+          cb?.fail?.call(this, err);
+          throw err;
+        });
+  }
+
+  /**
+   * Получение итоговых оценок
+   * @param {Object} [cb] Callback функции
+   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
+   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
+   * @return {Promise<JSON>}
+   */
+  getTotalMarks(cb) {
+    return fetch(
+        `${this.host}/asp/Reports/ReportStudentTotalMarks.asp`,
+        {
+          method: 'post',
+          headers: this.headers,
+          body: (
+            `at=${this._at}` +
+            `&ver=${this._ver}` +
+            `&RPTID=StudentTotalMarks` +
+            `&RPNAME=${encodeURI('Итоговые отметки')}`
+          ),
+        },
+    )
+        // Сохраняем куки
+        .then((res) => this.cookie = res)
+        // Получаем итоговые оценки
+        .then(() => fetch(
+            `${this.host}/asp/Reports/StudentTotalMarks.asp`,
+            {
+              method: 'post',
+              headers: {
+                ...this.headers,
+                'at': this._at,
+              },
+              body: (
+                `LoginType=0` +
+                `&AT=${this._at}` +
+                `&VER=${this._ver}` +
+                `&SID=${this.userId}` +
+                `&PCLID=${this.classId}`
+              ),
+            },
+        ))
+        // Получаем текст ответа
+        .then((res) => res.text())
+        // Отправляем успешный callback
+        .then((text) => (
+          cb?.done?.call(this, text),
+          text
         ))
         // Отправляем провальный callback
         .catch((err) => {

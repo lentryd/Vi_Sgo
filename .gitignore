@@ -2,5 +2,9 @@
 package-lock.json
 node_modules
 server/ssl/*
+database/links/*
+!database/links/index.js
 database/users/*
 !database/users/index.js
+database/tokens/*
+!database/tokens/index.js
