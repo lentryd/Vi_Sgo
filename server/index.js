@@ -811,8 +811,8 @@ app.get('/exist/:id', (req, res) => {
 
 // Отдаем файлы приложения
 app.use(compression());
-app.get('/:dir/:file', (req, res) => res.sendFile(
-    path.join(__dirname, 'public', req.params.dir, req.params.file),
+app.get(/^\/(css|img|js)\/(.+)/, (req, res) => res.sendFile(
+    path.join(__dirname, 'public', req.params[0], req.params[1]),
     {
       maxAge: 86400000,
     },
