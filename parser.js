@@ -385,6 +385,7 @@ module.exports = class {
   get headers() {
     return {
       'cookie': this.cookie,
+      'host': this._host,
       'referer': this.host,
       'x-requested-with': 'xmlhttprequest',
       'content-type': 'application/x-www-form-urlencoded',
@@ -555,7 +556,6 @@ module.exports = class {
         ))
         // Сохраняем нужные данные и получаем данные отчетов
         .then((data) => (
-          this.userId = data.userId,
           this.yearId = data.yearId,
           this.schoolId = data.schoolId,
           this.currYear = data.currYear,
@@ -576,6 +576,7 @@ module.exports = class {
         .then(this.checkJSON)
         // Сохраняем данные отчетов
         .then(({filterSources}) => (
+          this.userId = parseInt(filterSources[0].defaultValue),
           this.classId = parseInt(filterSources[1].defaultValue),
           this.range.start = new Date(filterSources[3].minValue),
           this.range.end = new Date(filterSources[3].maxValue),
