@@ -362,15 +362,7 @@ app.ws('/', (ws, req) => {
             ))
             .catch(ws.sendCatch);
         break;
-      // Пользовательские методы
       case 'ChangeUser':
-        if (!ws.checkAuth()) {
-          ws.sendError(
-              'Для этого метода нужна авторизация в системе',
-              4009,
-          );
-          return;
-        }
         if (!ws.appData?.data?.id) {
           ws.sendError(
               'Для этого метода необходимо передать параметр id',
@@ -381,6 +373,7 @@ app.ws('/', (ws, req) => {
         req.query.uid = ws.appData.data.id;
         ws.sendData({changed: ws.checkAuth()});
         break;
+      // Пользовательские методы
       case 'GetAuthLink':
         if (!ws.checkAuth()) {
           ws.sendError(
@@ -656,7 +649,7 @@ app.ws('/', (ws, req) => {
               } else return parser;
             })
             .then((parser) => parser.getMark({id: ws.appData.data.id}))
-            .then((mark) => ws.sendData({mark}))
+            .then((assignment) => ws.sendData({assignment}))
             .catch(ws.sendCatch);
         break;
       case 'GetSubject':
@@ -859,4 +852,5 @@ expressWS(
         )
         .listen(process.env.HTTPS_PORT),
 );
-console.info('Server started...');
+console.clear();
+console.info(' Инфо '.info, 'Сервер запущен');

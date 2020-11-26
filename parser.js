@@ -727,10 +727,10 @@ module.exports = class {
         // Изменяем ответ
         .then((data) => ({
           date: data.date,
-          name: data.assignmentName,
+          theme: data.assignmentName,
           weight: data.weight,
           teacher: data.teacher.name,
-          subject: data.subjectGroup.name,
+          subject: data.subjectGroup,
         }))
         // Отправляем успешный callback
         .then((data) => (
