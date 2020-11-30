@@ -121,41 +121,37 @@ function md5(str) {
 module.exports = class {
   /**
    * Проверка сервера
-   * @param {String} host Ссылка на проверяемый сервер (example.com)
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если сервер прошел проверку
-   * @param {Function} [cb.fail] Вызовется, если сервер не прошел проверку
-   * @return {Promise<Response>}
+   * @param {String} host Домен проверяемого сервера
+   * @return {Promise<Boolean>}
    */
-  static checkHost(host, cb) {
+  static checkHost(host) {
     return fetch(`http://${host}/webapi/prepareloginform`)
-        .then((res) => {
-          if (
-            !res.ok ||
-            !res.headers.get('content-type').startsWith('application/json')
-          ) throw new FetchError(res);
-
-          cb?.done?.call(this, res);
-          return res;
-        })
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
+        .then((res) =>
+          res.ok &&
+          res.headers.get('content-type').startsWith('application/json'),
+        );
   }
 
   /**
    * Получение формы авторизации
-   * @param {String} host  Ссылка на сервер (example.com)
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если сервер прошел проверку
-   * @param {Function} [cb.fail] Вызовется, если сервер не прошел проверку
-   * @return {Promise<JSON>}
+   * @param {String} host Домен сервера
+   * @return {Promise<{
+   *  id: String,
+   *  name: String,
+   *  value: Number,
+   *  options: {id: Number, name: String}[],
+   * }[]>}
    */
-  static authData(host, cb) {
+  static authForm(host) {
     const selectors = [];
-    return fetch(`http://${host}/webapi/logindata`)
-        // Проверяем ответ и по возможности парсим в JSON
+    return this.checkHost(host)
+        .then((fit) => {
+          if (!fit) {
+            throw new Error(`Этот сервер(${host}) не подходит для работы`);
+          } else {
+            return fetch(`http://${host}/webapi/logindata`);
+          }
+        })
         .then((res) => {
           if (
             !res.ok ||
@@ -164,11 +160,9 @@ module.exports = class {
 
           return res.json();
         })
-        // Получаем форму авториизации (селекторы которые она содержит)
         .then(({version}) => fetch(
             `http://${host}/vendor/pages/about/templates/loginform.html?ver=${version}`,
         ))
-        // Проверяем ответ и получаем текст ответа
         .then((res) => {
           if (
             !res.ok ||
@@ -177,21 +171,18 @@ module.exports = class {
 
           return res.text();
         })
-        // Превращаем текст в html
         .then(htmlParser.parse)
-        // Ищем все селекторы
-        .then((root) => {
-          for (const s of root.querySelectorAll('#message select')) {
+        .then((html) => {
+          for (const s of html.querySelectorAll('#message select')) {
             selectors.push({
               id: s.id,
-              value: null,
               name: s.getAttribute('name'),
+              value: null,
               options: [],
             });
           }
           return fetch(`http://${host}/webapi/prepareloginform`);
         })
-        // Проверяем ответ и по возможности парсим в JSON
         .then((res) => {
           if (
             !res.ok ||
@@ -200,55 +191,42 @@ module.exports = class {
 
           return res.json();
         })
-        // Возвращаем полученные данные
         .then((data) => {
           for (const name in data) {
             if (!name) continue;
             const value = data[name];
-            const index = selectors.findIndex(
-                (s) =>
-                  s.id.toLowerCase() == name.toLowerCase() ||
-                    s.name.toLowerCase() == name.toLowerCase(),
+            const index = selectors.findIndex((s) =>
+              s.id.toLowerCase() == name.toLowerCase() ||
+              s.name.toLowerCase() == name.toLowerCase(),
             );
             if (index < 0) continue;
 
             selectors[index][
-                typeof value == 'number' ?
+              typeof value == 'number' ?
                 'value' :
                 'options'
             ] = value;
           }
-          cb?.done?.call(this, selectors);
           return selectors;
-        })
-        // Обрабатываем ошибки
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
         });
   }
 
   /**
-   * Получение данных селектора
-   * @param {String} host Ссылка на сервер (example.com)
-   * @param {Object} data Данные для запроса
-   * @param {String} data.lastElem Последний выбор
-   * @param {Object} data.alreadySelected Уже выбранные данные
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если сервер прошел проверку
-   * @param {Function} [cb.fail] Вызовется, если сервер не прошел проверку
+   * Подгрузка формы авторизации на основе выбранных данных
+   * @param {String} host Домен сервера
+   * @param {String} allSelected Все выбранные елемены
+   * @param {String} lastSelected Последний выбранный елемент
    * @return {Promise<JSON>}
    */
-  static selectedData(host, data, cb) {
-    let selectedData = '';
-    for (const name in data?.alreadySelected) {
-      if (!name) continue;
-
-      if (selectedData) selectedData += '&';
-      selectedData += `${name}=${data.alreadySelected[name]}`;
-    }
-    return fetch(`http://${host}/webapi/loginform?${selectedData}&LASTNAME=${data.lastElem}`)
-        // Проверяем ответ и по возможности парсим в JSON
+  static uploadAuthForm(host, allSelected, lastSelected) {
+    return this.checkHost(host)
+        .then((fit) => {
+          if (!fit) {
+            throw new Error(`Этот сервер(${host}) не подходит для работы`);
+          } else {
+            return fetch(`http://${host}/webapi/loginform?${allSelected}&LASTNAME=${lastSelected}`);
+          }
+        })
         .then((res) => {
           if (
             !res.ok ||
@@ -257,16 +235,7 @@ module.exports = class {
 
           return res.json();
         })
-        // Отправляем данные
-        .then(({items}) => (
-          cb?.done?.call(this, items),
-          items
-        ))
-        // Обрабатываем ошибку
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
+        .then(({items}) => items);
   }
 
   /**
@@ -489,9 +458,8 @@ module.exports = class {
           this.tokenTimeOut = Date.now() + timeOut;
           if (Date.now() - this._timeParseInfo >= 864e5) {
             return this.getUsetInfo();
-          } else return void 0;
-        })
-        .then(() => this);
+          } else return this;
+        });
   }
 
   /**
@@ -602,18 +570,15 @@ module.exports = class {
         // Сохраняем фото
         .then((buffer) => (
           this.photo = 'data:image/jpeg;base64,' + buffer.toString('base64'),
-          void 0
+          this
         ));
   }
 
   /**
    * Получение типов работ
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
-   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
    * @return {Promise<JSON>}
    */
-  getTypes(cb) {
+  getTypes() {
     return fetch(
         `${this.host}/webapi/grade/assignment/types?all=false`,
         {
@@ -624,17 +589,7 @@ module.exports = class {
         },
     )
         // Проверяем ответ и по возможности парсим в JSON
-        .then(this.checkJSON)
-        // Отправляем успешный callback
-        .then((data) => (
-          cb?.done?.call(this, data),
-          data
-        ))
-        // Отправляем провальный callback
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
+        .then(this.checkJSON);
   }
 
   /**
@@ -642,12 +597,9 @@ module.exports = class {
    * @param {Object} data Период получаемых данных
    * @param {Date} data.start Начало периода
    * @param {Date} data.end Конец периода
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
-   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
    * @return {Promise<JSON>}
    */
-  getDiary(data, cb) {
+  getDiary(data) {
     return fetch(
         (
           `${this.host}/webapi/student/diary` +
@@ -688,11 +640,6 @@ module.exports = class {
                 })),
           })),
         })))
-        // Отправляем успешный callback
-        .then((data) => (
-          cb?.done?.call(this, data),
-          data
-        ))
         // Отправляем провальный callback
         .catch((err) => {
           cb?.fail?.call(this, err);
@@ -704,12 +651,9 @@ module.exports = class {
    * Получение оценки
    * @param {Object} data Данные оценки
    * @param {Date} data.id ID оценки
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
-   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
    * @return {Promise<JSON>}
    */
-  getMark(data, cb) {
+  getMark(data) {
     return fetch(
         (
           `${this.host}/webapi/student/diary/assigns/${data.id}` +
@@ -731,17 +675,7 @@ module.exports = class {
           weight: data.weight,
           teacher: data.teacher.name,
           subject: data.subjectGroup,
-        }))
-        // Отправляем успешный callback
-        .then((data) => (
-          cb?.done?.call(this, data),
-          data
-        ))
-        // Отправляем провальный callback
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
+        }));
   }
 
   /**
@@ -937,12 +871,9 @@ module.exports = class {
    * @param {String} data.id ID предмета
    * @param {Date} data.start Начало периода
    * @param {Date} data.end Конец периода
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
-   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
    * @return {Promise<JSON>}
    */
-  getSubject(data, cb) {
+  getSubject(data) {
     return new Promise((resolve) => resolve())
         // Проверяем наличие предмета
         .then(() => {
@@ -1019,17 +950,7 @@ module.exports = class {
                 }T00:00:00`);
               }
             },
-        ))
-        // Отправляем успешный callback
-        .then((data) => (
-          cb?.done?.call(this, data),
-          data
-        ))
-        // Отправляем провальный callback
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
+        ));
   }
 
   /**
@@ -1037,12 +958,9 @@ module.exports = class {
    * @param {Object} data Данные для парсинга
    * @param {Date} data.start Начало периода
    * @param {Date} data.end Конец периода
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
-   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
    * @return {Promise<JSON>}
    */
-  getJournal(data, cb) {
+  getJournal(data) {
     return new Promise((resolve) => resolve())
         // Проверяем правильность периода
         .then(() => {
@@ -1071,27 +989,14 @@ module.exports = class {
                 ),
               },
             ],
-        ))
-        // Отправляем успешный callback
-        .then((data) => (
-          cb?.done?.call(this, data),
-          data
-        ))
-        // Отправляем провальный callback
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
+        ));
   }
 
   /**
    * Получение итоговых оценок
-   * @param {Object} [cb] Callback функции
-   * @param {Function} [cb.done] Вызовется, если все пройдет успешно
-   * @param {Function} [cb.fail] Вызовется, если произойдет ошибка
    * @return {Promise<JSON>}
    */
-  getTotalMarks(cb) {
+  getTotalMarks() {
     return fetch(
         `${this.host}/asp/Reports/ReportStudentTotalMarks.asp`,
         {
@@ -1126,16 +1031,6 @@ module.exports = class {
             },
         ))
         // Получаем текст ответа
-        .then((res) => res.text())
-        // Отправляем успешный callback
-        .then((text) => (
-          cb?.done?.call(this, text),
-          text
-        ))
-        // Отправляем провальный callback
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
+        .then((res) => res.text());
   }
 };
