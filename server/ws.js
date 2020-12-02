@@ -16,11 +16,7 @@ const events = [
     auth: false,
     props: ['timestamp'],
     callback(data) {
-      this.send(JSON.stringify({
-        ok: true,
-        data,
-        method: 'Pong',
-      }));
+      this.sendData(data);
     },
   },
   {
@@ -363,7 +359,7 @@ const events = [
             end: new Date(data.end),
             start: new Date(data.start),
           }))
-          .then(this.sendData)
+          .then((journal) => this.sendData({journal}))
           .catch(this.sendCatch);
     },
   },
