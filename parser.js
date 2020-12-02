@@ -118,7 +118,195 @@ function md5(str) {
   return crypto.createHash('md5').update(str).digest('hex');
 }
 
-module.exports = class {
+/**
+ * Перевод html в json для итогов об успеваемости
+ * @this {Parser}
+ * @param {String} html
+ * @return {{
+ *  middleMark: Number,
+ *  assignments: {
+ *    type: String,
+ *    mark: String,
+ *    name: String,
+ *    date: String,
+ *    issueDate: String
+ *  }[]
+ * }}
+ */
+function parseSubject(html) {
+  const root = htmlParser.parse(html);
+  let assignments = root.querySelectorAll('table.table-print tr');
+  assignments = assignments.splice(1, assignments.length - 2);
+  assignments = assignments.map((a) => (
+    a.childNodes = a.childNodes.filter((c) => c.tagName == 'TD'),
+    {
+      type: a.childNodes[0].innerText,
+      name: a.childNodes[1].innerText,
+      date: str2date(a.childNodes[2].innerText),
+      issueDate: str2date(a.childNodes[3].innerText),
+      mark: +a.childNodes[4].innerText,
+    }
+  ));
+  return {
+    assignments,
+    middleMark: +root
+        .querySelector('table.table-print tr.totals')
+        .childNodes.filter((c) => c.tagName == 'TD')[2]
+        .text.replace(',', '.').replace(/^\D+(?=\d)/, ''),
+  };
+
+  /**
+   * Перевод строки в время
+   * @param {String} str Строка в формате dd.mm.yy
+   * @return {Date} Время
+   */
+  function str2date(str) {
+    const [, date, month, year] = str
+        .match(/(\d{1,2})\.(\d{1,2})\.(\d{1,2})/);
+    return new Date(`20${year}-${month}-${
+      date < 10 ?
+      '0' + date :
+      date
+    }T00:00:00`);
+  }
+}
+
+/**
+ * Перевод html в json для итогов об успеваемости и посещаемости
+ * @this {Parser}
+ * @param {String} html
+ * @return {{
+ *  name: String,
+ *  middleMark: Number,
+ *  assignments: {
+ *    value: String,
+ *    date: Date
+ *  }[]
+ * }[]}
+  */
+function parseJournal(html) {
+  // Начало учебного года
+  const studyYear = this.currYear.slice(0, 4);
+  // Индекс месяца
+  const monthIndex = {
+    Сентябрь: 8,
+    Октябрь: 9,
+    Ноябрь: 10,
+    Декабрь: 11,
+    Январь: 12,
+    Февраль: 13,
+    Март: 14,
+    Апрель: 15,
+    Май: 16,
+    Июнь: 17,
+    Июль: 18,
+    Август: 19,
+  };
+  // Получаем таблицу
+  const table = htmlParser.parse(`<body>${html}</body>`)
+      .querySelector('.table-print');
+  // Получаем средний балл
+  const middleMarks = table.querySelectorAll('td.cell-num');
+  // Получаем предметы
+  const subjects = table.querySelectorAll('td.cell-text');
+  // Получаем месяца
+  const months = table.querySelectorAll('tr')[0].querySelectorAll('th');
+  // Получаем даты
+  const dates = table.querySelectorAll('tr')[1].querySelectorAll('th');
+
+  // Получаем период месяцев и удаляем строку с месяцами
+  const journalMonths = [];
+  for (const i in months) {
+    if (!i) continue;
+    const m = months[i];
+    const to = +m?.getAttribute?.('colspan');
+    const from = journalMonths[journalMonths.length - 1]?.to ?? 0;
+    if (!to) continue;
+
+    journalMonths.push({
+      id: m.innerText,
+      from,
+      to: from + to,
+    });
+  }
+  table.querySelectorAll('tr')[0].remove();
+
+  // Получаем даты в формате Date и удаляем строку c датами
+  const journalDates = [];
+  for (const i in dates) {
+    if (!i) continue;
+    const d = dates[i];
+    const date = new Date(
+        studyYear +
+        '-01-' +
+        (d.innerText < 10 ? 0 : '') +
+        d.innerText +
+        'T00:00:00.000Z',
+    );
+    const month = journalMonths.find((m) => i >= m.from && i < m.to)?.id;
+    if (!month) continue;
+
+    date.setMonth(monthIndex[month]);
+    journalDates.push(date);
+  }
+  table.querySelectorAll('tr')[0].remove();
+
+  // Получаем название предметов и удаляем HTML элемент
+  const journalSubjects = [];
+  for (const i in subjects) {
+    if (!i) continue;
+    const s = subjects[i];
+    const name = s?.innerText;
+    if (!name) continue;
+
+    journalSubjects.push(name);
+    s.remove();
+  }
+
+  // Получаем средний балл и удаляем HTML элемент
+  const journalMiddleMarks = [];
+  for (const i in middleMarks) {
+    if (!i) continue;
+    const m = middleMarks[i];
+    const num = +m?.innerText?.replace?.(',', '.');
+    if (!num) continue;
+
+    journalMiddleMarks.push(num);
+    m.remove();
+  }
+
+  // Получаем оценки и готовим результат
+  const result = [];
+  const assignmentsRow = table.querySelectorAll('tr');
+  for (const i in assignmentsRow) {
+    if (!i) continue;
+    const row = assignmentsRow[i];
+    if (!row?.innerHTML) continue;
+    result.push({
+      name: journalSubjects[i],
+      middleMark: journalMiddleMarks[i],
+      assignments: [],
+    });
+
+    const assignments = row.querySelectorAll('td');
+    for (const i1 in assignments) {
+      if (!i) continue;
+      const a = assignments[i1];
+      if (!a?.structuredText) continue;
+      result[i].assignments.push({
+        value: a.structuredText,
+        date: journalDates[i1],
+      });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Работа с сетевым городом
+ */
+class Parser {
   /**
    * Проверка сервера
    * @param {String} host Домен проверяемого сервера
@@ -913,43 +1101,7 @@ module.exports = class {
                 ),
               },
             ],
-            (html) => {
-              const root = htmlParser.parse(html);
-              let assignments = root.querySelectorAll('table.table-print tr');
-              assignments = assignments.splice(1, assignments.length - 2);
-              assignments = assignments.map((a) => (
-                a.childNodes = a.childNodes.filter((c) => c.tagName == 'TD'),
-                {
-                  type: a.childNodes[0].innerText,
-                  name: a.childNodes[1].innerText,
-                  date: str2date(a.childNodes[2].innerText),
-                  issueDate: str2date(a.childNodes[3].innerText),
-                  mark: +a.childNodes[4].innerText,
-                }
-              ));
-              return {
-                assignments,
-                middleMark: +root
-                    .querySelector('table.table-print tr.totals')
-                    .childNodes.filter((c) => c.tagName == 'TD')[2]
-                    .text.replace(',', '.').replace(/^\D+(?=\d)/, ''),
-              };
-
-              /**
-               * Перевод строки в время
-               * @param {String} str Строка в формате dd.mm.yy
-               * @return {Date} Время
-               */
-              function str2date(str) {
-                const [, date, month, year] = str
-                    .match(/(\d{1,2})\.(\d{1,2})\.(\d{1,2})/);
-                return new Date(`20${year}-${month}-${
-                  date < 10 ?
-                  '0' + date :
-                  date
-                }T00:00:00`);
-              }
-            },
+            parseSubject.bind(this),
         ));
   }
 
@@ -989,6 +1141,7 @@ module.exports = class {
                 ),
               },
             ],
+            parseJournal.bind(this),
         ));
   }
 
@@ -1034,3 +1187,5 @@ module.exports = class {
         .then((res) => res.text());
   }
 };
+
+module.exports = Parser;
