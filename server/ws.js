@@ -67,9 +67,10 @@ const events = [
             } else {
               return new Parser(
                   data.host, data.login, data.password, data.ttsLogin,
-              ).logIn();
+              );
             }
           })
+          .then((parser) => parser.logIn().then(() => parser))
           .then((parser) => Users.add({
             host: data.host,
             login: data.login,
@@ -238,7 +239,7 @@ const events = [
     name: 'LeftSessionTime',
     callback() {
       this.parser()
-          .then((p) => p.tokenTimeOut - Date.now())
+          .then((p) => p._sessionTime - Date.now())
           .then((time) => this.sendData({time}))
           .catch(this.sendCatch);
     },
@@ -249,15 +250,7 @@ const events = [
     callback() {
       this.parser()
           .then((p) => p.needAuth ? p.logIn() : p)
-          .then((p) => {
-            if (p.readUserUpdate == true) return;
-            return this.userSaveInfo({
-              photo: p.photo,
-              email: p.email,
-              lastName: p.lastName,
-              firstName: p.firstName,
-            });
-          })
+          .then((p) => {})
           .then(() => this.sendData({auth: true}))
           .catch(this.sendCatch);
     },
@@ -273,12 +266,53 @@ const events = [
     },
   },
   {
-    // Период обучения
-    name: 'GetStudyYear',
-    authSgo: true,
+    // Доска объявлений
+    name: 'GetAnnouncements',
     callback() {
       this.parser()
-          .then((p) => p.range)
+          .then((p) => p.announcements())
+          .then((announcements) => this.sendData({announcements}))
+          .catch(this.sendCatch);
+    },
+  },
+  {
+    // ID доступных объявлений
+    name: 'GetAnnouncementsID',
+    callback() {
+      this.parser()
+          .then((p) => p.announcements())
+          .then((posts) => posts.map((p) => p.id))
+          .then((ids) => this.sendData({ids}))
+          .catch(this.sendCatch);
+    },
+  },
+  {
+    // Количество непрочитанных сообщений
+    name: 'GetUnreadedMessages',
+    callback() {
+      this.parser()
+          .then((p) => p.unreadedMessages())
+          .then((number) => this.sendData({number}))
+          .catch(this.sendCatch);
+    },
+  },
+  {
+    // Список дней рождений
+    name: 'GetBirthdays',
+    props: ['date'],
+    callback({date, withParents}) {
+      this.parser()
+          .then((p) => p.birthdays(new Date(date), withParents))
+          .then((birthdays) => this.sendData({birthdays}))
+          .catch(this.sendCatch);
+    },
+  },
+  {
+    // Период обучения
+    name: 'GetStudyYear',
+    callback() {
+      this.parser()
+          .then((p) => p.studyYear)
           .then((studyYear) => this.sendData({studyYear}))
           .catch(this.sendCatch);
     },
@@ -286,7 +320,6 @@ const events = [
   {
     // Получить список предметов
     name: 'GetSubjectsList',
-    authSgo: true,
     callback() {
       this.parser()
           .then((p) => p.subjects)
@@ -297,10 +330,9 @@ const events = [
   {
     // Получить тип заданий
     name: 'GetAssignmentsType',
-    authSgo: true,
     callback() {
       this.parser()
-          .then((p) => p.getTypes())
+          .then((p) => p.assignmentTypes())
           .then((types) => this.sendData({types}))
           .catch(this.sendCatch);
     },
@@ -309,13 +341,9 @@ const events = [
     // Получение дневника по периоду
     name: 'GetDiaryRange',
     props: ['start', 'end'],
-    authSgo: true,
-    callback(data) {
+    callback({start, end}) {
       this.parser()
-          .then((p) => p.getDiary({
-            start: new Date(data.start),
-            end: new Date(data.end),
-          }))
+          .then((p) => p.diary(new Date(start), new Date(end)))
           .then((days) => this.sendData({days}))
           .catch(this.sendCatch);
     },
@@ -324,10 +352,9 @@ const events = [
     // Получение задания
     name: 'GetAssignment',
     props: ['id'],
-    authSgo: true,
-    callback(data) {
+    callback({id}) {
       this.parser()
-          .then((p) => p.getMark({id: data.id}))
+          .then((p) => p.assignment(id))
           .then((assignment) => this.sendData({assignment}))
           .catch(this.sendCatch);
     },
@@ -336,14 +363,9 @@ const events = [
     // Получение отчета по предмету
     name: 'GetSubjectReport',
     props: ['id', 'start', 'end'],
-    authSgo: true,
-    callback(data) {
+    callback({id, start, end}) {
       this.parser()
-          .then((p) => p.getSubject({
-            id: data.id,
-            end: new Date(data.end),
-            start: new Date(data.start),
-          }))
+          .then((p) => p.subject(id, new Date(start), new Date(end)))
           .then((subject) => this.sendData({subject}))
           .catch(this.sendCatch);
     },
@@ -352,13 +374,9 @@ const events = [
     // Получение отчета об успеваемости
     name: 'GetStudyReport',
     props: ['start', 'end'],
-    authSgo: true,
-    callback(data) {
+    callback({start, end}) {
       this.parser()
-          .then((p) => p.getJournal({
-            end: new Date(data.end),
-            start: new Date(data.start),
-          }))
+          .then((p) => p.journal(new Date(start), new Date(end)))
           .then((journal) => this.sendData({journal}))
           .catch(this.sendCatch);
     },
@@ -366,10 +384,9 @@ const events = [
   {
     // Получение отчета об итоговых оценках
     name: 'GetTotalReport',
-    authSgo: true,
     callback() {
       this.parser()
-          .then((p) => p.getTotalMarks())
+          .then((p) => p.totalMarks())
           .then(this.sendData)
           .catch(this.sendCatch);
     },
