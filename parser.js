@@ -1,113 +1,7 @@
-const WebSocket = require('ws');
 const crypto = require('crypto');
-const fetch = require('node-fetch');
+const WebSocket = require('ws');
+const nodeFetch = require('node-fetch');
 const htmlParser = require('node-html-parser');
-
-/**
- * Обработка ошибки во время запросов
- */
-class FetchError {
-  /**
-   * Инициализация ошибки
-   * @param {Response} res Ответ сервера
-   * @param {*} sameData Данные, которые нужно передать вместе с ошибкой
-   */
-  constructor(res, sameData) {
-    this.fr = true;
-    this.res = res;
-    this.status = res.status;
-    this.statusText = res.statusText;
-    this.sameData = sameData;
-  }
-
-  /**
-   * Проверяет работу сервера (статус 500)
-   * @return {Boolean} `true` если сервер лег
-   */
-  work() {
-    return this.status >= 500;
-  }
-
-  /**
-   * Проверяет авторизацию (статуст 401, 403, 409)
-   * @return {Boolean} `true` если есть проблемы с авторизацие
-   */
-  auth() {
-    return this.status == 409 || this.status == 401 || this.status == 403;
-  }
-
-  /**
-   * Текст ответа
-   * @return {Promise<String>}
-   */
-  text() {
-    return this.res.text();
-  }
-
-  /**
-   * Текст ответа в виде JSON
-   * @return {Promise<JSON>}
-   */
-  json() {
-    return this.res.json();
-  }
-
-  /**
-   * Данные, которые были переданы в ошибку (по умолчанию {})
-   * @return {*}
-   */
-  get data() {
-    return this.sameData || {};
-  }
-
-  /**
-   * Сообщение об ошибке
-   * @return {string}
-   */
-  get message() {
-    return `code: ${this.status}\ntext: ${this.statusText}`;
-  }
-}
-
-/**
- * Обработка ошибки во время проверок и т.д.
- */
-class WorkError {
-  /**
-   * Инициализация ошибки
-   * @param {String} msg Сообщение
-   * @param {Number} [code] Код ошибки, по умолчанию `0`
-   */
-  constructor(msg, code = 0) {
-    this.wr = true;
-    this._msg = msg;
-    this._code = code;
-  }
-
-  /**
-   * Сообщение ошибки
-   * @return {String}
-   */
-  get message() {
-    return this._msg;
-  }
-
-  /**
-   * Код ошибки
-   * @return {Number}
-   */
-  get code() {
-    return this._code;
-  }
-
-  /**
-   * Ответ в виде строки
-   * @return {String}
-   */
-  toString() {
-    return `code: ${this.code}\nmessage: ${this.message}`;
-  }
-}
 
 /**
  * MD5 хэш
@@ -116,6 +10,139 @@ class WorkError {
  */
 function md5(str) {
   return crypto.createHash('md5').update(str).digest('hex');
+}
+
+/**
+ * Сохранить контекс приложения
+ * @this {Parser}
+ * @param {String} link ссылка на запрос
+ * @param {*} data данные запроса
+ * @param {String} token токен соединения
+ * @return {Promise<Number>}
+ */
+function makeWSRequest(link, data, token) {
+  token = encodeURIComponent(token);
+  return new Promise((res, rej) => {
+    const ws = new WebSocket(
+        `ws${this._secure ? 's' : ''}://${this._host}/WebApi/signalr/connect` +
+          `?at=${this._at}` +
+          `&clientProtocol=1.5` +
+          `&transport=webSockets` +
+          `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D` +
+          `&connectionToken=${token}`,
+        {
+          headers: {'cookie': this.cookie},
+        },
+    );
+
+    ws.on('open', () => {
+      this.fetch(
+          `/WebApi/signalr/start` +
+            `?at=${this._at}` +
+            `&clientProtocol=1.5` +
+            `&transport=webSockets` +
+            `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D` +
+            `&connectionToken=${token}`,
+      )
+          .then(() => this.fetch(
+              `/${link}`,
+              {
+                method: 'post',
+                headers: {
+                  'content-type': 'application/json; charset=UTF-8',
+                },
+                body: JSON.stringify({
+                  selectedData: data,
+                  params: [
+                    {
+                      name: 'SCHOOLYEARID',
+                      value: this._yearId,
+                    },
+                    {
+                      name: 'SERVERTIMEZONE',
+                      value: this._serverTimeZone,
+                    },
+                    {
+                      name: 'DATEFORMAT',
+                      value: this._dateForamt,
+                    },
+                    {
+                      name: 'FULLSCHOOLNAME',
+                      value: this._skoolName,
+                    },
+                  ],
+                }),
+              },
+          ))
+          .then(({taskId}) => ws.send(
+              JSON.stringify({
+                I: 0,
+                H: 'queuehub',
+                M: 'StartTask',
+                A: [taskId],
+              }),
+          ))
+          .catch(() => ws.close(4001, 'Не удалось открыть соединение'));
+    });
+
+    ws.on('message', (msg) => {
+      try {
+        msg = JSON.parse(msg);
+      } catch (e) {
+        return;
+      }
+
+      switch (msg?.M?.[0]?.M) {
+        case 'complete':
+          res(msg.M[0].A[0].Data);
+          ws.close(4000);
+          break;
+        case 'error':
+          close.call(this, 4003, msg.M[0].A[0].Details, true);
+          break;
+      }
+    });
+
+    ws.on('error', (err) => close.call(this, 4002, err.message, true));
+
+    ws.on('close', close.bind(this));
+
+    /**
+     * Закрываем соединени
+     * @this {Parser}
+     * @param {Number} code Код закрытия
+     * @param {String} msg Сообщение закрытия
+     * @param {Boolean} close Нужно ли закрыть соединение
+     */
+    function close(code, msg, close = false) {
+      if (close) ws.close(4009);
+      switch (code) {
+        case 4000: break;
+        case 4001:
+          rej(new WorkError('Error during initialization.', 12));
+          break;
+        case 4002:
+          rej(new WorkError('Error in socket.\nError: ' + msg, 13));
+          break;
+        case 4003:
+          rej(new WorkError('Error in task.\nError: ' + msg, 14));
+          break;
+        case 4009:
+          return;
+        default:
+          rej(new WorkError('Unknown error.\nError: ' + msg, -10));
+      }
+
+      this.fetch(
+          `/WebApi/signalr/abort` +
+            `?at=${this._at}` +
+            `&clientProtocol=1.5` +
+            `&transport=webSockets` +
+            `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D` +
+            `&connectionToken=${token}`,
+      );
+    }
+  });
 }
 
 /**
@@ -135,7 +162,7 @@ function md5(str) {
  */
 function parseSubject(html) {
   const root = htmlParser.parse(html);
-  let assignments = root.querySelectorAll('table.table-print tr');
+  let assignments = root.querySelectorAll('table.table-print tr') ?? [];
   assignments = assignments.splice(1, assignments.length - 2);
   assignments = assignments.map((a) => (
     a.childNodes = a.childNodes.filter((c) => c.tagName == 'TD'),
@@ -150,9 +177,9 @@ function parseSubject(html) {
   return {
     assignments,
     middleMark: +root
-        .querySelector('table.table-print tr.totals')
-        .childNodes.filter((c) => c.tagName == 'TD')[2]
-        .text.replace(',', '.').replace(/^\D+(?=\d)/, ''),
+        ?.querySelector('table.table-print tr.totals')
+        ?.childNodes.filter((c) => c.tagName == 'TD')?.[2]
+        ?.text.replace(',', '.').replace(/^\D+(?=\d)/, '') ?? null,
   };
 
   /**
@@ -163,11 +190,7 @@ function parseSubject(html) {
   function str2date(str) {
     const [, date, month, year] = str
         .match(/(\d{1,2})\.(\d{1,2})\.(\d{1,2})/);
-    return new Date(`20${year}-${month}-${
-      date < 10 ?
-      '0' + date :
-      date
-    }T00:00:00`);
+    return new Date(`${month}-${date}-${year}`);
   }
 }
 
@@ -186,7 +209,7 @@ function parseSubject(html) {
   */
 function parseJournal(html) {
   // Начало учебного года
-  const studyYear = this.currYear.slice(0, 4);
+  const studyYear = this._currYear.slice(0, 4);
   // Индекс месяца
   const monthIndex = {
     Сентябрь: 8,
@@ -205,6 +228,7 @@ function parseJournal(html) {
   // Получаем таблицу
   const table = htmlParser.parse(`<body>${html}</body>`)
       .querySelector('.table-print');
+  if (!table) return [];
   // Получаем средний балл
   const middleMarks = table.querySelectorAll('td.cell-num');
   // Получаем предметы
@@ -294,7 +318,7 @@ function parseJournal(html) {
       const a = assignments[i1];
       if (!a?.structuredText) continue;
       result[i].assignments.push({
-        value: a.structuredText,
+        value: a.structuredText.replace(/&nbsp;/g, ' '),
         date: journalDates[i1],
       });
     }
@@ -304,12 +328,193 @@ function parseJournal(html) {
 }
 
 /**
- * Работа с сетевым городом
+ * Сохранить контекс приложения
+ * @this {Parser}
+ * @param {String} html страница сетевого
+ * @return {void}
  */
+function parseAppContext(html) {
+  const appContext = new Function(html
+      // eslint-disable-next-line max-len
+      ?.match(/\w+ appContext = {.+?};|appContext\.(?!ya)\w+ = (?!function).+?;/sg)
+      ?.reduce((a, c) => a += c) +
+      'return appContext;',
+  )();
+
+  this._yearId = appContext.yearId;
+  this._skoolId = appContext.schoolId;
+  this._currYear = appContext.currYear;
+  this._skoolName = appContext.fullSchoolName;
+  this._dateFormat = appContext.dateFormat;
+  this._timeForamt = appContext.timeFormat;
+  this._serverTimeZone = appContext.serverTimeZone;
+
+  return void 0;
+}
+
+/**
+ * Найти информацию о пользователе
+ * @this {Parser}
+ * @param {String} html страница с настройками сетевого
+ * @return {{
+ *  email: String,
+ *  phone: Number,
+ *  lastName: String,
+ *  firstName: String,
+ *  birthDate: Date,
+ *  patronymic: String,
+ * }}
+ */
+function parseUserInfo(html) {
+  const email = html.match(/E-Mail.+?value="(.*?)"/)?.[1] ?? '';
+  const phone = +(html.match(/Мобильный телефон.+?value="(.*?)"/)?.[1] ?? 0);
+  const lastName = html.match(/Фамилия.+?value="(.*?)"/)?.[1] ?? '';
+  const firstName = html.match(/Имя.+?value="(.*?)"/)?.[1] ?? '';
+  const patronymic = html.match(/Отчество.+?value="(.*?)"/)?.[1] ?? '';
+  const birthDateRaw = html.match(/Дата рождения.+?value="(.*?)"/)?.[1] ?? '';
+  const match = birthDateRaw.match(/(\d{2})\.(\d{2})\.*(\d{0,4})/);
+  const birthDate = new Date(`${match[2]} ${match[1]} ${match[3]}`);
+
+  return {
+    email,
+    phone,
+    lastName,
+    firstName,
+    birthDate,
+    patronymic,
+  };
+}
+
+/**
+ * Перевод html в json для списка дней рождений
+ * @this {Parser}
+ * @param {String} html страница со списком
+ * @return {{
+ *  date: Date,
+ *  name: String,
+ *  role: String,
+ *  class: String
+ * }[]}
+ */
+function parseBirthdays(html) {
+  const root = htmlParser.parse(html);
+  const table = root.querySelector('.table.print-block');
+  table.querySelector('tr').remove();
+  const people = table.querySelectorAll('tr');
+  const result = [];
+  people.forEach((p) => {
+    const data = p.querySelectorAll('td');
+    result.push({
+      date: str2date(data[2].structuredText),
+      name: data[3].structuredText,
+      role: data[1].structuredText,
+      class: data[0].structuredText,
+    });
+  });
+  result.sort((a, b) => +a.date - +b.date);
+  return result;
+
+  /**
+   * Функция для получения даты
+   * @param {String} str строка с датой типа `8.06`
+   * @return {Date}
+   */
+  function str2date(str) {
+    const match = str?.match(/(\d{1,2})\.(\d{2})/);
+    const day = +(match?.[1] ?? 20);
+    const month = +(match?.[2] ?? 4);
+    const date = new Date();
+
+    date.setDate(day);
+    date.setHours(0, 0, 0);
+    date.setMonth(month - 1);
+
+    return date;
+  }
+}
+
+/**
+ * Обработка ошибки во время проверок и т.д.
+ */
+class WorkError {
+  /**
+   * Инициализация ошибки
+   * @param {String} msg Сообщение
+   * @param {Number} [code] Код ошибки, по умолчанию `0`
+   */
+  constructor(msg, code = 0) {
+    this.wr = true;
+    this._msg = msg;
+    this._code = code;
+  }
+
+  /**
+   * Сообщение ошибки
+   * @return {String}
+   */
+  get message() {
+    return this._msg;
+  }
+
+  /**
+   * Код ошибки
+   * @return {Number}
+   */
+  get code() {
+    return this._code;
+  }
+
+  /**
+   * Ответ в виде строки
+   * @return {String}
+   */
+  toString() {
+    return `code: ${this.code}\nmessage: ${this.message}`;
+  }
+}
+
+/** Обработка ошибки во время запросов */
+class FetchError {
+  /**
+   * Инициализация ошибки
+   * @param {Response} res Ответ сервера
+   */
+  constructor(res) {
+    this.fr = true;
+    this.status = res.status;
+    this.statusText = res.statusText;
+  }
+
+  /**
+   * Проверяет работу сервера (статус 500)
+   * @return {Boolean} `true` если сервер лег
+   */
+  get work() {
+    return this.status >= 500;
+  }
+
+  /**
+   * Проверяет авторизацию (статуст 401, 403, 409)
+   * @return {Boolean} `true` если есть проблемы с авторизацие
+   */
+  get auth() {
+    return this.status == 409 || this.status == 401 || this.status == 403;
+  }
+
+  /**
+   * Сообщение об ошибке
+   * @return {string}
+   */
+  get message() {
+    return `${this.status}: ${this.statusText}`;
+  }
+}
+
+/** Парсинг информации с сетевого города */
 class Parser {
   /**
-   * Проверка сервера
-   * @param {String} host Домен проверяемого сервера
+   * Проверка домена
+   * @param {String} host Домен
    * @return {Promise<Boolean>}
    */
   static checkHost(host) {
@@ -322,7 +527,7 @@ class Parser {
 
   /**
    * Получение формы авторизации
-   * @param {String} host Домен сервера
+   * @param {String} host Домен
    * @return {Promise<{
    *  id: String,
    *  name: String,
@@ -427,87 +632,44 @@ class Parser {
   }
 
   /**
-   * Обвязка для удобного взаимодействия
-   * @param {String} host Ссылка на сервер
-   * @param {String} login Логин ученика
-   * @param {String} password Пароль ученика
-   * @param {String} ttsLogin Данные авторизации (регион, школа и т.д.)
-   */
-  constructor(host, login, password, ttsLogin) {
-    /**
-     * Обозначения данных
-     *  Где используются:
-     *    $0 - Система
-     *    $1 - Авторизация
-     *    $2 - Взаимодействие с сайтом
-     *    $3 - Система/Публичный доступ
-     *
-     *  Как можно добыть:
-     *    #0 - Передаются в конструктроре
-     *    #1 - Можно получить только после или во время авторизации
-     *    #2 - Появляются во время работы парсера (куки и прочее)
-     *    #3 - Результаты функций, которые нужно сохранить
-     */
-    // Данные: #0 $1
+   * Создать парсер
+   * @param {String} host Домен сайта
+   * @param {String} login Логин пользователя
+   * @param {String} password Пароль пользователя
+   * @param {String} ttslogin Данные для входа
+  */
+  constructor(host, login, password, ttslogin) {
     this._host = host;
     this._login = login;
     this._password = password;
-    this._ttsLogin = ttsLogin.toLowerCase();
+    this._ttslogin = ttslogin;
 
-    // Данные: #1 $2
-    this._at = undefined;
-    this._ver = undefined;
-
-    // Данные: #2 $2
+    this._at = null;
+    this._ver = null;
     this._cookie = {};
     this._secure = false;
-    this._timeParseInfo = null;
+    this._sessionTime = 0;
 
-    // Данные: #3 $3
-    this.photo = null;
-    this.email = null;
-    this.range = {
+    this._userId = null;
+    this._yearId = null;
+    this._classId = null;
+    this._skoolId = null;
+    this._currYear = null;
+    this._skoolName = null;
+    this._timeForamt = null;
+    this._dateForamt = null;
+    this._serverTimeZone = null;
+
+    this.subjects = [];
+    this.studyYear = {
       start: null,
       end: null,
     };
-    this.subjects = [];
-    this.userId = null;
-    this.yearId = null;
-    this.classId = null;
-    this.schoolId = null;
-    this.currYear = null;
-    this.lastName = null;
-    this.firstName = null;
-    this.dateFormat = null;
-    this.tokenTimeOut = null;
-    this.fullSchoolName = null;
-    this.serverTimeZone = null;
-    this.readUserUpdate = null;
   }
 
+  // Данные
   /**
-   * Информация о пользователе
-   * @return {Object}
-   */
-  get info() {
-    return {
-      firstName: this.firstName,
-      lastName: this.lastName,
-      email: this.email,
-      photo: this.photo,
-    };
-  }
-
-  /**
-   * Ссылка на сайт
-   * @return {String}
-   */
-  get host() {
-    return `http${this._secure?'s':''}://${this._host}`;
-  }
-
-  /**
-   * Возврящает куки
+   * Куки
    * @return {String}
    */
   get cookie() {
@@ -521,294 +683,265 @@ class Parser {
   }
 
   /**
-   * Устанавливает куки для парсера
-   * @param {Response} res Ответ сервера
-   * @return {Response}
+   * Нужна ли авторизация в сетевом
+   * @return {boolean} `true` если нужна
    */
-  set cookie(res) {
+  get needAuth() {
+    return this._sessionTime - Date.now() <= 1000;
+  }
+
+  // Функции
+  /**
+   * Запросы на сервер
+   * @param {String} link ссылка
+   * @param {Object} [params] данные запроса
+   * @param {String} [params.method] метод
+   * @param {Object | String} [params.body] данные
+   * @param {Boolean} [raw] `true` если нужно вернуть ответ
+   * @return {Promise<Response>}
+   */
+  fetch(link, params = {}, raw = false) {
+    const href = `http${this._secure?'s':''}://${this._host}`;
+    const headers = {
+      'at': this._at,
+      'host': this._host,
+      'cookie': this.cookie,
+      'referer': href,
+      'content-type': 'application/x-www-form-urlencoded',
+      'x-requested-with': 'xmlhttprequest',
+    };
+    if (!this._at) delete headers.at;
+    if (!params.body) delete headers['content-type'];
+    else if (params.body.toString() == '[object Object]') {
+      let str = '';
+      for (const name in params.body) {
+        if (!params.body[name]) continue;
+        if (str) str += '&';
+        if (name == '!-!') str += params.body[name];
+        else str += `${name}=${params.body[name]}`;
+      }
+      params.body = str;
+    }
+
+    return nodeFetch(
+        href+link,
+        {
+          ...params,
+          headers: {
+            ...headers,
+            ...params.headers,
+          },
+        },
+    )
+        .then((res) => {
+          if (!res.ok) throw new FetchError(res);
+          this.saveCookie(res);
+          if (raw) {
+            return res;
+          } else if (
+            res.headers.get('content-type').startsWith('application/json')
+          ) {
+            return res.json();
+          } else {
+            return res.text();
+          }
+        });
+  }
+
+  /**
+   * Сохранение куки
+   * @param {Response} res Ответ сервера
+   */
+  saveCookie(res) {
     for (const c of res.headers.raw()['set-cookie'] || []) {
       if (typeof c != 'string') continue;
       const [, name, value] = c.match(/^(.+?)=(.+?)(?=;|$)/) || [];
       if (!name || !value) continue;
       this._cookie[name] = value;
     }
-    return res;
   }
 
   /**
-   * Часто используемые заголовки
-   * @return {Object}
+   * Загрузка отчета
+   * @param {String} link ссылка на запрос
+   * @param {*} data данные запроса
+   * @return {Promise<String>}
    */
-  get headers() {
-    return {
-      'cookie': this.cookie,
-      'host': this._host,
-      'referer': this.host,
-      'x-requested-with': 'xmlhttprequest',
-      'content-type': 'application/x-www-form-urlencoded',
-    };
+  reportFile(link, data) {
+    return this.fetch(
+        `/WebApi/signalr/negotiate` +
+          `?_=${this._ver}` +
+          `&at=${this._at}` +
+          `&clientProtocol=1.5` +
+          `&transport=webSockets` +
+          `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D`,
+    )
+        .then(({ConnectionToken}) =>
+          makeWSRequest.call(this, link, data, ConnectionToken),
+        )
+        .then((id) => this.fetch(`/webapi/files/${id}`));
   }
 
-  /**
-   * Нужна ли авторизация в сетевом
-   * @return {boolean} `true` если нужна
-   */
-  get needAuth() {
-    return this.tokenTimeOut - Date.now() <= 1000;
-  }
-
-  /**
-   * Проверка ответа сервера (res == JSON)
-   * @param {Response} res Ответ сервера
-   * @throws {FetchError} Ошибка будет вызвана, если ответ не является JSON или
-   * `res.ok == false`
-   * @return {Promise} JSON
-   */
-  checkJSON(res) {
-    if (
-      !res.ok ||
-      !res.headers.get('content-type').startsWith('application/json')
-    ) throw new FetchError(res);
-    else return res.json();
-  }
-
-  /**
-   * Проверка временного периода
-   * @param {Date[]} dates Проверяемые даты
-   * @return {Boolean} `true` если период верный
-   */
-  checkRange(...dates) {
-    for (const date of dates) {
-      if (!date?.toJSON) continue;
-      if (
-        this.range.start - date > 864e5 ||
-        date - this.range.end > 864e5 ||
-        date == 'Invalid Date'
-      ) return false;
-    }
-    return true;
-  }
-
+  // Авторизация и данные пользователя
   /**
    * Авторизация в сетевом
-   * @return {Promise<this>}
+   * @return {Promise<void>}
    */
   logIn() {
-    return fetch(this.host)
-        // Проверяем хост (доступен и есть ли SSL)
-        .then((res) => {
-          if (res.ok) this._secure = res.url.startsWith('https');
-          else throw new FetchError(res);
+    return this.fetch('/', {}, true)
+        .then((res) => this._secure = res.url.startsWith('https'))
+        .then(() => this.fetch('/webapi/auth/getdata', {method: 'post'}))
+        .then(({lt, ver, salt}) => {
+          this._ver = ver;
+          const password = md5(salt + md5(this._password));
+          const body = {
+            lt,
+            ver,
+            '!-!': this._ttslogin,
+            'UN': encodeURI(this._login),
+            'PW': password.substring(0, this._password.length),
+            'pw2': password,
+            'LoginType': 1,
+          };
+
+          return this.fetch('/webapi/login', {method: 'post', body});
         })
-        // Делаем запрос к `/webapi/auth/getdata` (нужно для авторизации)
-        .then(() => fetch(
-            `${this.host}/webapi/auth/getdata`,
-            {
-              method: 'post',
-              headers: this.headers,
-            },
-        ))
-        // Сохраняем куки, которые отправил сервер
-        .then((res) => this.cookie = res)
-        // Проверяем ответ и по возможности парсим в JSON
-        .then(this.checkJSON)
-        // Сохраняем `ver` и проходим авторизацию
-        .then(({ver, salt, lt}) => (
-          this._ver = ver,
-          fetch(
-              `${this.host}/webapi/login`,
-              {
-                method: 'post',
-                headers: this.headers,
-                body: (
-                  'LoginType=1' +
-                  `&lt=${lt}` +
-                  `&ver=${ver}` +
-                  `&${this._ttsLogin}` +
-                  `&UN=${encodeURI(this._login)}` +
-                  `&PW=${
-                    md5(
-                        salt +
-                        md5(this._password),
-                    ).substring(0, this._password.length)}` +
-                  `&pw2=${md5(salt + md5(this._password))}`
-                ),
-              },
-          )
-        ))
-        // Сохраняем куки, которые отправил сервер
-        .then((res) => this.cookie = res)
-        // Проверяем ответ и по возможности парсим в JSON
-        .then(this.checkJSON)
-        // Сохраняем `at` и `tokenTimeOut`, после чего получаем остальные данные
         .then(({at, timeOut}) => {
           this._at = at;
-          this.tokenTimeOut = Date.now() + timeOut;
-          if (Date.now() - this._timeParseInfo >= 864e5) {
-            return this.getUsetInfo();
-          } else return this;
-        });
+          this._sessionTime = Date.now() + timeOut;
+          if (!this._userId) return this.appContext();
+        })
+        .then(() => void 0);
   }
 
   /**
-   * Выход из сетевого
-   * @return {Promise<undefined>}
+   * Выход со сетевом
+   * @return {Promise<void>}
    */
   logOut() {
-    return fetch(
-        `${this.host}/asp/logout.asp`,
+    return this.fetch(
+        '/asp/logout.asp',
         {
           method: 'post',
-          headers: this.headers,
-          body: (
-            `at=${this._at}` +
-            `&VER=${this._ver}`
-          ),
+          body: {
+            AT: this._at,
+            VER: this._ver,
+          },
         },
     )
-        // Отправляем успешный callback
-        .then((res) => {
-          if (!res.ok) throw new FetchError(res);
+        .then(() => {
           this._at = null;
           this._ver = null;
-          this.tokenTimeOut = null;
-          return undefined;
+          this._sessionTime = null;
+        })
+        .then(() => void 0);
+  }
+
+  /**
+   * Данные приложения
+   * @return {Promise<void>}
+   */
+  appContext() {
+    return this.fetch(
+        '/angular/school/main/',
+        {
+          method: 'post',
+          body: {
+            AT: this._at,
+            VER: this._ver,
+            LoginType: 0,
+          },
+        },
+    )
+        .then(parseAppContext.bind(this))
+        .then(() => this.fetch('/webapi/reports/studentgrades'))
+        .then(({filterSources}) => {
+          this._userId = parseInt(filterSources[0].defaultValue);
+          this._classId = parseInt(filterSources[1].defaultValue);
+          this.subjects = filterSources[2].items.map(
+              (s) => ({id: s.value, name: s.title}),
+          );
+          this.studyYear.end = new Date(filterSources[3].maxValue);
+          this.studyYear.start = new Date(filterSources[3].minValue);
+          return void 0;
         });
   }
 
   /**
-   * Получение информации о пользователе
-   * @return {Promise<undefined>}
+   * Данные пользователя
+   * @return {Promise<{
+   *  email: String,
+   *  phone: Number,
+   *  lastName: String,
+   *  firstName: String,
+   *  birthDate: Date,
+   *  patronymic: String,
+   * }>}
    */
-  getUsetInfo() {
-    return fetch(
-        `${this.host}/asp/MySettings/MySettings.asp?at=${this._at}`,
+  userInfo() {
+    return this.fetch(
+        `/asp/MySettings/MySettings.asp?at=${this._at}`,
         {
           method: 'post',
-          headers: this.headers,
-          body: (
-            `AT=${this._at}` +
-            `&VER=${this._ver}`
-          ),
-        },
-    )
-        // Получаем текст ответа
-        .then((res) => res.text())
-        // Получаем фамилию, имя и почту
-        .then((text) => (
-          this.firstName = text.match(/Имя.+?value="(.*?)"/)?.[1],
-          this.lastName = text.match(/Фамилия.+?value="(.*?)"/)?.[1],
-          this.email = text.match(/E-Mail.+?value="(.*?)"/)?.[1],
-          text
-        ))
-        // Парсим данные `appContext`
-        .then((text) => (
-          new Function(text
-              // eslint-disable-next-line max-len
-              .match(/\w+ appContext = {.+?};|appContext\.(?!ya)\w+ = (?!function).+?;/sg)
-              .reduce((a, c) => a += c) +
-              'return appContext',
-          )()
-        ))
-        // Сохраняем нужные данные и получаем данные отчетов
-        .then((data) => (
-          this.yearId = data.yearId,
-          this.schoolId = data.schoolId,
-          this.currYear = data.currYear,
-          this.dateFormat = data.dateFormat,
-          this.fullSchoolName = data.fullSchoolName,
-          this.serverTimeZone = data.serverTimeZone,
-          fetch(
-              `${this.host}/webapi/reports/studentgrades`,
-              {
-                headers: {
-                  ...this.headers,
-                  'at': this._at,
-                },
-              },
-          )
-        ))
-        // Проверяем ответ и по возможности парсим в JSON
-        .then(this.checkJSON)
-        // Сохраняем данные отчетов
-        .then(({filterSources}) => (
-          this.userId = parseInt(filterSources[0].defaultValue),
-          this.classId = parseInt(filterSources[1].defaultValue),
-          this.range.start = new Date(filterSources[3].minValue),
-          this.range.end = new Date(filterSources[3].maxValue),
-          this.subjects = filterSources[2].items,
-          this._timeParseInfo = Date.now(),
-          this.readUserUpdate = false,
-          void 0
-        ))
-        // Загружаем фото
-        .then(() => fetch(
-            (
-              `${this.host}/webapi/users/photo` +
-              `?at=${this._at}` +
-              `&ver=${this._ver}` +
-              `&userId=${this.userId}`
-            ),
-            {
-              headers: this.headers,
-            },
-        ))
-        // Получаем буфер
-        .then((res) => res.buffer())
-        // Сохраняем фото
-        .then((buffer) => (
-          this.photo = 'data:image/jpeg;base64,' + buffer.toString('base64'),
-          this
-        ));
-  }
-
-  /**
-   * Получение типов работ
-   * @return {Promise<JSON>}
-   */
-  getTypes() {
-    return fetch(
-        `${this.host}/webapi/grade/assignment/types?all=false`,
-        {
-          headers: {
-            ...this.headers,
-            'at': this._at,
+          body: {
+            AT: this._at,
+            VER: this._ver,
           },
         },
     )
-        // Проверяем ответ и по возможности парсим в JSON
-        .then(this.checkJSON);
+        .then(parseUserInfo);
   }
 
   /**
-   * Получение дневника
-   * @param {Object} data Период получаемых данных
-   * @param {Date} data.start Начало периода
-   * @param {Date} data.end Конец периода
-   * @return {Promise<JSON>}
+   * Фото пользователя
+   * @return {Promise<Buffer>}
    */
-  getDiary(data) {
-    return fetch(
-        (
-          `${this.host}/webapi/student/diary` +
+  userPhoto() {
+    return this.fetch(
+        `/webapi/users/photo` +
+          `?at=${this._at}` +
+          `&ver=${this._ver}` +
+          `&userId=${this._userId}`,
+        {},
+        true,
+    )
+        .then((res) => res.buffer());
+  }
+
+  // Парсинг страниц
+  /**
+   * Дневник
+   * @param {Date} start начало недели
+   * @param {Date} end конец недели
+   * @return {Promise<{
+   *  date: Date,
+   *  lessons: {
+   *    id: String,
+   *    name: String,
+   *    room: String,
+   *    number: Number,
+   *    endTime: String,
+   *    homework: String,
+   *    startTime: String,
+   *    assignments: {
+   *      id: String,
+   *      type: Number,
+   *      mark: Number
+   *    }[]
+   *  }[]
+   * }[]>}
+  */
+  diary(start, end) {
+    return this.fetch(
+        '/webapi/student/diary' +
           `?vers=${this._ver}` +
-          `&yearId=${this.yearId}` +
-          `&studentId=${this.userId}` +
-          `&weekEnd=${data.end.toJSON().replace(/T.+/, '')}` +
-          `&weekStart=${data.start.toJSON().replace(/T.+/, '')}`
-        ),
-        {
-          headers: {
-            ...this.headers,
-            'at': this._at,
-          },
-        },
+          `&yearId=${this._yearId}` +
+          `&studentId=${this._userId}` +
+          `&weekEnd=${end.toJSON()}` +
+          `&weekStart=${start.toJSON()}`,
     )
-        // Проверяем ответ и по возможности парсим в JSON
-        .then(this.checkJSON)
-        // Изменяем ответ
-        .then(({weekDays}) => weekDays.map((day) => ({
-          date: day.date,
+        .then(({weekDays}) =>weekDays.map((day) => ({
+          date: new Date(day.date),
           lessons: day.lessons.map((lesson) => ({
             id: lesson.classmeetingId,
             name: lesson.subjectName,
@@ -827,365 +960,222 @@ class Parser {
                   mark: assignment.mark?.mark,
                 })),
           })),
-        })))
-        // Отправляем провальный callback
-        .catch((err) => {
-          cb?.fail?.call(this, err);
-          throw err;
-        });
+        })));
   }
 
   /**
-   * Получение оценки
-   * @param {Object} data Данные оценки
-   * @param {Date} data.id ID оценки
-   * @return {Promise<JSON>}
+   * Отчет об успеваемости
+   * @param {Number} id id предмета
+   * @param {Date} start начало отчета
+   * @param {Data} end конец отчета
+   * @return {Promise<{
+   *  middleMark: Number,
+   *  assignments: {
+   *    type: String,
+   *    mark: String,
+   *    name: String,
+   *    date: String,
+   *    issueDate: String
+   *  }[]
+   * }>}
    */
-  getMark(data) {
-    return fetch(
-        (
-          `${this.host}/webapi/student/diary/assigns/${data.id}` +
-          `?studentId=${this.userId}`
-        ),
+  subject(id, start, end) {
+    return this.reportFile(
+        'webapi/reports/studentgrades/queue',
+        [
+          {
+            filterId: 'SID',
+            filterValue: this._userId,
+          },
+          {
+            filterId: 'PCLID_IUP',
+            filterValue: this._classId + '_0',
+          },
+          {
+            filterId: 'SGID',
+            filterValue: id,
+          },
+          {
+            filterId: 'period',
+            filterValue: start.toJSON() + ' - ' + end.toJSON(),
+          },
+        ],
+    )
+        .then(parseSubject.bind(this));
+  }
+
+  /**
+   * Отчет об успеваемости
+   * @param {Date} start начало отчета
+   * @param {Data} end конец отчета
+   * @return {Promise<{
+   *  name: String,
+   *  middleMark: Number,
+   *  assignments: {
+   *    value: String,
+   *    date: Date
+   *  }[]
+   * }[]>}
+   */
+  journal(start, end) {
+    return this.reportFile(
+        'webapi/reports/studenttotal/queue',
+        [
+          {
+            filterId: 'SID',
+            filterValue: this._userId,
+          },
+          {
+            filterId: 'PCLID',
+            filterValue: this._classId,
+          },
+          {
+            filterId: 'period',
+            filterValue: start.toJSON() + ' - ' + end.toJSON(),
+          },
+        ],
+    )
+        .then(parseJournal.bind(this));
+  }
+
+  /**
+   * Список именинников
+   * @param {Date} date Месяц и год, для которого нужен список
+   * @param {Boolean} [withParents] Отображать родителей
+   * @return {Promise<{
+   *  date: Date,
+   *  name: String,
+   *  role: String,
+   *  class: String
+   * }[]>}
+  */
+  birthdays(date, withParents = false) {
+    return this.fetch(
+        '/asp/Calendar/MonthBirth.asp',
         {
-          headers: {
-            ...this.headers,
-            'at': this._at,
+          method: 'post',
+          body: {
+            AT: this._at,
+            VER: this._ver,
+            Year: date.getFullYear(),
+            Month: date.getMonth() + 1,
+            PCLID: this._classId,
+            ViewType: 1,
+            LoginType: 0,
+            BIRTH_STAFF: 1,
+            BIRTH_PARENT: withParents ? 2 : 0,
+            BIRTH_STUDENT: 2,
+            From_MonthBirth: 1,
+            MonthYear: date.getMonth() + 1 + ',' + date.getFullYear(),
           },
         },
     )
-        // Проверяем ответ и по возможности парсим в JSON
-        .then(this.checkJSON)
-        // Изменяем ответ
-        .then((data) => ({
-          date: data.date,
-          theme: data.assignmentName,
-          weight: data.weight,
-          teacher: data.teacher.name,
-          subject: data.subjectGroup,
+        .then(parseBirthdays.bind(this));
+  }
+
+  /**
+   * Информация об задании
+   * @param {Number | String} id id задания
+   * @return {Promise<{
+   *  date: Date,
+   *  theme: String,
+   *  weight: Number,
+   *  teacher: String,
+   *  subject: {
+   *    id: Number,
+   *    name: String
+   *  }
+   * }>}
+   */
+  assignment(id) {
+    return this.fetch(
+        `/webapi/student/diary/assigns/${id}?studentId=${this._userId}`,
+    )
+        .then((a) => ({
+          date: new Date(a.date),
+          theme: a.assignmentName,
+          weight: a.weight,
+          teacher: a.teacher.name,
+          subject: a.subjectGroup,
         }));
   }
 
   /**
-   * Загрузка отчета
-   * @param {String} queueURL Ссылка на страницу запроса
-   * @param {*} selectedData Выбранные данные, которые нужно отправить
-   * @param {Function} [parseHTML] Функция для обработки ответа
+   * Итоговые оценки
    * @return {Promise<JSON>}
    */
-  getReportFile(queueURL, selectedData, parseHTML = (html) => html) {
-    return fetch(
-        (
-          `${this.host}/WebApi/signalr/negotiate` +
-          `?_=${this._ver}` +
-          `&at=${this._at}` +
-          `&clientProtocol=1.5` +
-          `&transport=webSockets` +
-          `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D`
-        ),
-        {
-          headers: this.headers,
-        },
-    )
-        // Проверяем ответ и по возможности парсим в JSON
-        .then(this.checkJSON)
-        // Устанавливаем ws соединение
-        .then(({ConnectionToken}) => new Promise((resolve, reject) => {
-          const ws = new WebSocket(
-              (
-                `${this.host.replace('http', 'ws')}/WebApi/signalr/connect` +
-                `?at=${this._at}` +
-                `&clientProtocol=1.5` +
-                `&transport=webSockets` +
-                `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D` +
-                `&connectionToken=${encodeURIComponent(ConnectionToken)}`
-              ),
-              {
-                headers: this.headers,
-              },
-          );
-
-          ws.on('open', () => fetch(
-              (
-                `${this.host}/WebApi/signalr/start` +
-                `?at=${this._at}` +
-                `&clientProtocol=1.5` +
-                `&transport=webSockets` +
-                `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D` +
-                `&connectionToken=${encodeURIComponent(ConnectionToken)}`
-              ),
-              {
-                headers: this.headers,
-              },
-          )
-              // Проверяем ответ и по возможности парсим в JSON
-              .then(this.checkJSON)
-              // Делаем запрос на получение данных
-              .then(() => fetch(
-                  `${this.host}/${queueURL}`,
-                  {
-                    method: 'post',
-                    headers: {
-                      ...this.headers,
-                      'at': this._at,
-                      'content-type': 'application/json; charset=UTF-8',
-                    },
-                    body: JSON.stringify({
-                      selectedData,
-                      'params': [
-                        {
-                          'name': 'SCHOOLYEARID',
-                          'value': this.yearId,
-                        },
-                        {
-                          'name': 'SERVERTIMEZONE',
-                          'value': this.serverTimeZone,
-                        },
-                        {
-                          'name': 'DATEFORMAT',
-                          'value': this.dateFormat,
-                        },
-                        {
-                          'name': 'FULLSCHOOLNAME',
-                          'value': this.fullSchoolName,
-                        },
-                      ],
-                    }),
-                  },
-              ))
-              // Проверяем ответ и по возможности парсим в JSON
-              .then(this.checkJSON)
-              // Отправляем ID данных
-              .then(({taskId}) => ws.send(
-                  JSON.stringify({
-                    'I': 0,
-                    'H': 'queuehub',
-                    'M': 'StartTask',
-                    'A': [taskId],
-                  }),
-              ))
-              // Если ошибка, то закрываем соединение
-              .catch(() => ws.close(4001, 'Couldn\'t open the connection.')),
-          );
-
-          ws.on('message', (msg) => {
-            try {
-              msg = JSON.parse(msg);
-            } catch (e) {
-              return;
-            }
-
-            switch (msg?.M?.[0]?.M) {
-              case 'complete':
-                resolve(msg.M[0].A[0].Data);
-                ws.close(4000);
-                break;
-              case 'error':
-                close.call(this, 4003, msg.M[0].A[0].Details, true);
-                break;
-            }
-          });
-
-          ws.on('error', (err) => close.call(this, 4002, err.message, true));
-
-          ws.on('close', close.bind(this));
-
-          /**
-           * Закрываем соединени
-           * @this this
-           * @param {Number} code Код закрытия
-           * @param {String} msg Сообщение закрытия
-           * @param {Boolean} close Нужно ли закрыть соединение
-           */
-          function close(code, msg, close = false) {
-            if (close) ws.close(4009);
-            // Проверяем причину ошибки и если надо, то отправляем ошибку
-            switch (code) {
-              case 4000:
-                // Если соединение закрыто без ошибок
-                break;
-              case 4001:
-                reject(new WorkError('Error during initialization.', 12));
-                break;
-              case 4002:
-                reject(new WorkError('Error in socket.\nError: ' + msg, 13));
-                break;
-              case 4003:
-                reject(new WorkError('Error in task.\nError: ' + msg, 14));
-                break;
-              case 4009:
-                return;
-              default:
-                reject(new WorkError('Unknown error.\nError: ' + msg, -10));
-            }
-            // Завершаем соединение
-            fetch(
-                (
-                  `${this.host}/WebApi/signalr/abort` +
-                  `?at=${this._at}` +
-                  `&clientProtocol=1.5` +
-                  `&transport=webSockets` +
-                  `&connectionData=%5B%7B%22name%22%3A%22queuehub%22%7D%5D` +
-                  `&connectionToken=${encodeURIComponent(ConnectionToken)}`
-                ),
-                {
-                  headers: this.headers,
-                },
-            );
-          }
-        }))
-        // Получаем файл
-        .then((id) => fetch(
-            `${this.host}/webapi/files/${id}`,
-            {
-              headers: {
-                ...this.headers,
-                'at': this._at,
-              },
-            },
-        ))
-        // Получаем текст файла
-        .then((res) => {
-          if (!res.ok) throw new FetchError(res);
-          else return res.text();
-        })
-        // Парсим результат
-        .then(parseHTML);
-  }
-
-  /**
-   * Получение оценок предмета
-   * @param {Object} data Данные для парсинга
-   * @param {String} data.id ID предмета
-   * @param {Date} data.start Начало периода
-   * @param {Date} data.end Конец периода
-   * @return {Promise<JSON>}
-   */
-  getSubject(data) {
-    return new Promise((resolve) => resolve())
-        // Проверяем наличие предмета
-        .then(() => {
-          if (!this.subjects.find((s) => s.value == data.id)) {
-            throw new WorkError('Invalid id', 10);
-          }
-          return void 0;
-        })
-        // Проверяем правильность периода
-        .then(() => {
-          if (!this.checkRange(data?.start, data?.end)) {
-            throw new WorkError('Invalid period', 11);
-          }
-          return void 0;
-        })
-        // Получаем отчет
-        .then(() => this.getReportFile(
-            'webapi/reports/studentgrades/queue',
-            [
-              {
-                'filterId': 'SID',
-                'filterValue': this.userId,
-              },
-              {
-                'filterId': 'PCLID_IUP',
-                'filterValue': this.classId + '_0',
-              },
-              {
-                'filterId': 'SGID',
-                'filterValue': data.id,
-              },
-              {
-                'filterId': 'period',
-                'filterValue': (
-                  data.start.toJSON() + ' - ' +
-                  data.end.toJSON()
-                ),
-              },
-            ],
-            parseSubject.bind(this),
-        ));
-  }
-
-  /**
-   * Получение всех предметов
-   * @param {Object} data Данные для парсинга
-   * @param {Date} data.start Начало периода
-   * @param {Date} data.end Конец периода
-   * @return {Promise<JSON>}
-   */
-  getJournal(data) {
-    return new Promise((resolve) => resolve())
-        // Проверяем правильность периода
-        .then(() => {
-          if (!this.checkRange(data?.start, data?.end)) {
-            throw new WorkError('Invalid period', 11);
-          }
-          return void 0;
-        })
-        // Получаем отчет
-        .then(() => this.getReportFile(
-            'webapi/reports/studenttotal/queue',
-            [
-              {
-                'filterId': 'SID',
-                'filterValue': this.userId,
-              },
-              {
-                'filterId': 'PCLID',
-                'filterValue': this.classId,
-              },
-              {
-                'filterId': 'period',
-                'filterValue': (
-                  data.start.toJSON() + ' - ' +
-                  data.end.toJSON()
-                ),
-              },
-            ],
-            parseJournal.bind(this),
-        ));
-  }
-
-  /**
-   * Получение итоговых оценок
-   * @return {Promise<JSON>}
-   */
-  getTotalMarks() {
-    return fetch(
-        `${this.host}/asp/Reports/ReportStudentTotalMarks.asp`,
+  totalMarks() {
+    return this.fetch(
+        '/asp/Reports/ReportStudentTotalMarks.asp',
         {
           method: 'post',
-          headers: this.headers,
-          body: (
-            `at=${this._at}` +
-            `&ver=${this._ver}` +
-            `&RPTID=StudentTotalMarks` +
-            `&RPNAME=${encodeURI('Итоговые отметки')}`
-          ),
+          body: {
+            AT: this._at,
+            VER: this._ver,
+            RPTID: 'StudentTotalMarks',
+            RPNAME: encodeURI('Итоговые отметки'),
+          },
         },
     )
-        // Сохраняем куки
-        .then((res) => this.cookie = res)
-        // Получаем итоговые оценки
-        .then(() => fetch(
-            `${this.host}/asp/Reports/StudentTotalMarks.asp`,
+        .then(() => this.fetch(
+            '/asp/Reports/StudentTotalMarks.asp',
             {
               method: 'post',
-              headers: {
-                ...this.headers,
-                'at': this._at,
+              body: {
+                AT: this._at,
+                VET: this._ver,
+                SID: this._userId,
+                PCLID: this._classId,
+                LoginType: 0,
               },
-              body: (
-                `LoginType=0` +
-                `&AT=${this._at}` +
-                `&VER=${this._ver}` +
-                `&SID=${this.userId}` +
-                `&PCLID=${this.classId}`
-              ),
             },
-        ))
-        // Получаем текст ответа
-        .then((res) => res.text());
+        ));
   }
-};
+
+  /**
+   * Объявления
+   * @return {Promise<{
+   *  id: Number,
+   *  date: Date,
+   *  name: String,
+   *  author: String,
+   *  description: String,
+   * }[]>}
+   */
+  announcements() {
+    return this.fetch('/webapi/announcements?take=-1')
+        .then((posts) =>
+          posts.map((p) => ({
+            id: p.id,
+            date: new Date(p.postDate),
+            name: p.name,
+            author: p.author.fio,
+            description: p.description,
+          })),
+        );
+  }
+
+  /**
+   * Типы заданий
+   * @return {Promise<{id: Number, name: String}[]>}
+   */
+  assignmentTypes() {
+    return this.fetch('/webapi/grade/assignment/types?all=false')
+        .then((types) =>
+          types.map((t) => ({
+            id: t.id,
+            name: t.name,
+          })),
+        );
+  }
+
+  /**
+   * Количество непрочитанных сообщений
+   * @return {Promise<Number>}
+   */
+  unreadedMessages() {
+    return this.fetch('/webapi/mail/messages/unreaded');
+  }
+}
 
 module.exports = Parser;
