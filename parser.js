@@ -649,6 +649,7 @@ class Parser {
     this._cookie = {};
     this._secure = false;
     this._sessionTime = 0;
+    this._performingLogIn = null;
 
     this._userId = null;
     this._yearId = null;
@@ -788,30 +789,32 @@ class Parser {
    * @return {Promise<void>}
    */
   logIn() {
-    return this.fetch('/', {}, true)
-        .then((res) => this._secure = res.url.startsWith('https'))
-        .then(() => this.fetch('/webapi/auth/getdata', {method: 'post'}))
-        .then(({lt, ver, salt}) => {
-          this._ver = ver;
-          const password = md5(salt + md5(this._password));
-          const body = {
-            lt,
-            ver,
-            '!-!': this._ttslogin,
-            'UN': encodeURI(this._login),
-            'PW': password.substring(0, this._password.length),
-            'pw2': password,
-            'LoginType': 1,
-          };
+    return this._performingLogIn ?? (
+      this._performingLogIn = this.fetch('/', {}, true)
+          .then((res) => this._secure = res.url.startsWith('https'))
+          .then(() => this.fetch('/webapi/auth/getdata', {method: 'post'}))
+          .then(({lt, ver, salt}) => {
+            this._ver = ver;
+            const password = md5(salt + md5(this._password));
+            const body = {
+              lt,
+              ver,
+              '!-!': this._ttslogin,
+              'UN': encodeURI(this._login),
+              'PW': password.substring(0, this._password.length),
+              'pw2': password,
+              'LoginType': 1,
+            };
 
-          return this.fetch('/webapi/login', {method: 'post', body});
-        })
-        .then(({at, timeOut}) => {
-          this._at = at;
-          this._sessionTime = Date.now() + timeOut;
-          if (!this._userId) return this.appContext();
-        })
-        .then(() => void 0);
+            return this.fetch('/webapi/login', {method: 'post', body});
+          })
+          .then(({at, timeOut}) => {
+            this._at = at;
+            this._sessionTime = Date.now() + timeOut;
+            if (!this._userId) return this.appContext();
+          })
+          .then(() => this._performingLogIn = void 0)
+    );
   }
 
   /**
